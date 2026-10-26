@@ -115,10 +115,12 @@ docs/
     objects.md       hashing, trust model, core node types
     chunking.md      chunker and chunk index
     clojure.md       Clojure layer (draft)
+reference/           Python reference implementation and vector generator
+test-resources/
+  vectors/           golden vectors
 ```
 
-Planned additions: `reference/` (Python reference implementation),
-`test-resources/vectors/` (golden vectors), `src/` and `test/`.
+Planned additions: `src/` and `test/`.
 
 ## Lineage
 

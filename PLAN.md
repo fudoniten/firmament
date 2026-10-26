@@ -28,9 +28,9 @@ Decisions and their reasons are logged in [docs/decisions.md](docs/decisions.md)
       gear table, index levels.
 - [x] [docs/spec/clojure.md](docs/spec/clojure.md) — Clojure layer direction
       (draft; frozen later, in Phases 2–3).
-- [ ] Python reference implementation of encoding, hashing and chunking
+- [x] Python reference implementation of encoding, hashing and chunking
       (`reference/`), independent of the Clojure one.
-- [ ] Golden vectors in `test-resources/vectors/`: values with their canonical
+- [x] Golden vectors in `test-resources/vectors/`: values with their canonical
       bytes and hashes, invalid inputs a decoder must reject, the gear table,
       and chunking cases (cut points and index roots for generated data).
 

@@ -81,7 +81,9 @@ This is deliberately narrower than what the Clojure reader accepts.
 - Reject anything not produced by the rules above (wrong order, extra
   whitespace, non-NFC strings, out-of-range integers, unknown tags, uppercase
   hex, non-canonical base64 such as missing padding or nonzero trailing bits).
-- Reject nesting deeper than 256 levels.
+- Reject nesting deeper than 256 levels. Depth counts vectors and maps: a
+  top-level `[]` has depth 1, so 256 nested vectors are valid and 257 are not.
+  Encoders enforce the same limit.
 - Equivalently: decode, re-encode, and require byte equality with the input.
 
 ## Examples
@@ -93,5 +95,6 @@ This is deliberately narrower than what the Clojure reader accepts.
 #h "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 ```
 
-Golden vectors (value, canonical bytes, hash) will live in
-`test-resources/vectors/` and are the final authority over this text.
+Golden vectors (value, canonical bytes, hash, and inputs a decoder must
+reject) are in [`test-resources/vectors/encoding.edn`](../../test-resources/vectors/encoding.edn)
+and are the final authority over this text.
