@@ -115,12 +115,29 @@ docs/
     objects.md       hashing, trust model, core node types
     chunking.md      chunker and chunk index
     clojure.md       Clojure layer (draft)
+deps.edn             Clojure project
+flake.nix            Nix dev shell (JDK, Clojure CLI, Python)
+src/firmament/
+  edn.clj            canonical EDN encoder and strict decoder
+  hash.clj           blob and structured-object hashes
+test/                Clojure tests, including the golden vectors
 reference/           Python reference implementation and vector generator
 test-resources/
   vectors/           golden vectors
 ```
 
-Planned additions: `src/` and `test/`.
+## Development
+
+Enter the dev shell with `nix develop`, or install a JDK (21+), the Clojure
+CLI and Python 3 yourself. Then:
+
+```
+clojure -M:test                                         # Clojure tests
+python3 reference/gen_vectors.py --check                # vectors are current
+(cd reference && python3 -m unittest discover -s tests -t .)
+```
+
+CI runs all three on every pull request.
 
 ## Lineage
 
