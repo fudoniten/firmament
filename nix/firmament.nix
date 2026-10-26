@@ -8,7 +8,9 @@
 let
   inherit (pkgs) lib;
 
-  version = "0.1.0-SNAPSHOT";
+  # mkClojureLib passes the version to `clojure -T:build` unquoted, where it is
+  # read as EDN, so it must read back as itself: "0.1" works, "0.1.0" doesn't.
+  version = "0.1";
 
   source = files: lib.fileset.toSource {
     root = ../.;
