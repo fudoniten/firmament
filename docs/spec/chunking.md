@@ -1,6 +1,7 @@
 # Chunking
 
-Format version: `firmament-0` (draft).
+Format version: `firmament-0`, frozen 2026-10-26 (provisional; see
+[Format versions](objects.md#format-versions)).
 
 The same bytes must always produce the same hash, so the chunking algorithm and
 every constant are part of the format. The algorithm is FastCDC-style (gear

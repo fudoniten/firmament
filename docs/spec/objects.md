@@ -1,6 +1,7 @@
 # Objects and Hashing
 
-Format version: `firmament-0` (draft).
+Format version: `firmament-0`, frozen 2026-10-26 (provisional; see
+[Format versions](#format-versions)).
 
 ## Hashing
 
@@ -18,6 +19,25 @@ There are only two prefixes. A structured object says what it is through a
 A link is written `#h "sha256:<hex>"`. Links are the only way objects refer to
 each other, so a walker can collect every reference in any structured object
 without knowing its schema.
+
+## Format versions
+
+A format version fixes every input to a hash: the canonical encoding, the hash
+prefixes, the object shapes in this document and the chunker. Versions are
+named `firmament-N`.
+
+- **`firmament-0` is frozen.** Its spec text and golden vectors no longer
+  change; anything they leave ambiguous is settled by the vectors. It is
+  provisional: a later version is expected once real use shows what to
+  change.
+- **A change to any hash input is a new version**, never an edit to an
+  existing one. Each version keeps its own spec text and golden vectors.
+- **Versions do not share hashes.** A version that hashes anything
+  differently also changes the hash prefixes (for example `"blob1\n"` and
+  `"edn1\n"`), so the same hash can never mean two different things. The
+  exact scheme is chosen with that version.
+- **A store holds one version** and records which. Moving data between
+  versions is a re-import that produces new hashes.
 
 ## Trust model
 

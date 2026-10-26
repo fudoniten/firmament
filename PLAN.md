@@ -50,6 +50,8 @@ Decisions and their reasons are logged in [docs/decisions.md](docs/decisions.md)
 
 **Exit criteria:** the Python reference produces the vectors, the spec text and
 vectors agree, and the format version `firmament-0` is declared frozen.
+*Met 2026-10-26: `firmament-0` is frozen as a provisional version (see
+[Format versions](docs/spec/objects.md#format-versions)).*
 
 ## Phase 1 — Store and encoding
 

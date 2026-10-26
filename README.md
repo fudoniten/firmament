@@ -13,8 +13,9 @@ The first target is Clojure: namespaces are stored as hashed trees, so a node
 can be told *"load H and run"*, and upgraded by diffing H against its
 successor.
 
-> **Status:** pre-alpha. Nothing runs yet. The data formats are being frozen
-> first, because hashes make them permanent. See [PLAN.md](PLAN.md).
+> **Status:** pre-alpha. The data formats are frozen as the provisional
+> version `firmament-0`, with encoding, hashing and chunking implemented; the
+> store and CLI come next. See [PLAN.md](PLAN.md).
 
 ## Why
 
