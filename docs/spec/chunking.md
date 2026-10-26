@@ -37,8 +37,8 @@ the last 64 bytes, while low bits depend only on the most recent few bytes.
 SHA-256("firmament-gear-v0" ‖ byte(i))
 ```
 
-where `byte(i)` is the single byte with value `i`. The full table will be
-published in `test-resources/vectors/gear.edn`.
+where `byte(i)` is the single byte with value `i`. The full table is in
+[`test-resources/vectors/gear.edn`](../../test-resources/vectors/gear.edn).
 
 ## Cut-point algorithm
 
@@ -98,6 +98,10 @@ make one entry per node (its link and `:size`) and repeat at the next level.
 
 ## Verification
 
-Because there are no external reference vectors, the chunker will be
-implemented twice — in Clojure and in an independent Python reference — and
-the golden vectors are accepted only when both agree.
+Because there are no external reference vectors, the chunker is implemented
+twice — in Clojure and in an independent Python reference
+([`reference/`](../../reference/)) — and the golden vectors are accepted only
+when both agree. Cut points and file roots are in
+[`chunking.edn`](../../test-resources/vectors/chunking.edn); index building
+on its own, including the 4096-entry cap and three-level indexes, is in
+[`index.edn`](../../test-resources/vectors/index.edn).

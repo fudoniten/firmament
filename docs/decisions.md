@@ -49,3 +49,18 @@ the `ns` form over the file path; the loader maps classloader path requests
 back to namespaces.
 
 **`data_readers` deferred.**
+
+## 2026-10-26 — Reference implementation and vectors
+
+**Nesting depth defined.** Vectors and maps count; a top-level `[]` has
+depth 1, so 256 levels are valid and 257 are not.
+
+**Vectors describe large inputs instead of storing them.** Chunking inputs
+are generated from SHA-256 in counter mode (or zeros), so the vector files
+stay small and any implementation can rebuild the bytes. Index building is
+tested on its own with synthetic links, which is the only practical way to
+reach the 4096-entry cap and a three-level index.
+
+**Vector files are plain EDN, pure ASCII.** Non-ASCII characters are
+`\u` escapes, so a value reads the same in any EDN reader; canonical bytes
+are given as hex. The vector files are not themselves canonical EDN.
