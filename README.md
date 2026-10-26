@@ -122,6 +122,7 @@ nix/                 Nix derivations used by flake.nix
 src/firmament/
   edn.clj            canonical EDN encoder and strict decoder
   hash.clj           blob and structured-object hashes
+  chunk.clj          chunker and chunk index
 test/                Clojure tests, including the golden vectors
 reference/           Python reference implementation and vector generator
 test-resources/
