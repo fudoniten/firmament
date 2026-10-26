@@ -116,7 +116,9 @@ docs/
     chunking.md      chunker and chunk index
     clojure.md       Clojure layer (draft)
 deps.edn             Clojure project
-flake.nix            Nix dev shell (JDK, Clojure CLI, Python)
+deps-lock.json       pinned Clojure dependencies, for Nix builds
+flake.nix            Nix build, checks and dev shell
+nix/                 Nix derivations used by flake.nix
 src/firmament/
   edn.clj            canonical EDN encoder and strict decoder
   hash.clj           blob and structured-object hashes
@@ -137,7 +139,17 @@ python3 reference/gen_vectors.py --check                # vectors are current
 (cd reference && python3 -m unittest discover -s tests -t .)
 ```
 
-CI runs all three on every pull request.
+With Nix:
+
+```
+nix build                 # the library jar
+nix flake check           # all of the above, offline, in the Nix sandbox
+nix run .#update-deps     # regenerate deps-lock.json after editing deps.edn
+```
+
+The Nix builds use [fudo-nix-helpers](https://github.com/fudoniten/fudo-nix-helpers),
+which builds from the artifacts pinned in `deps-lock.json`. CI runs every
+check above on each pull request, and fails if `deps-lock.json` is stale.
 
 ## Lineage
 

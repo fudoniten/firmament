@@ -1,21 +1,43 @@
 {
   description = "Firmament: content-addressed computing, starting with Clojure";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.05";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    fudo-nix-helpers = {
+      url = "github:fudoniten/fudo-nix-helpers";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, fudo-nix-helpers }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
-      forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+      forAllSystems = f: nixpkgs.lib.genAttrs systems (system:
+        f (import ./nix/firmament.nix {
+          pkgs = nixpkgs.legacyPackages.${system};
+          helpers = fudo-nix-helpers.legacyPackages.${system};
+        }));
     in {
-      devShells = forAllSystems (pkgs: {
-        default = pkgs.mkShell {
-          packages = [
-            pkgs.jdk21
-            (pkgs.clojure.override { jdk = pkgs.jdk21; })
-            pkgs.python3
-          ];
+      # nix build
+      packages = forAllSystems (f: {
+        default = f.firmament;
+        inherit (f) firmament;
+      });
+
+      # nix flake check
+      checks = forAllSystems (f: {
+        inherit (f) firmament clojure-tests reference-tests vectors-current;
+      });
+
+      # nix run .#update-deps    (after changing deps.edn)
+      apps = forAllSystems (f: {
+        update-deps = {
+          type = "app";
+          program = "${f.updateDeps}/bin/update-deps.sh";
         };
       });
+
+      # nix develop
+      devShells = forAllSystems (f: { default = f.devShell; });
     };
 }
