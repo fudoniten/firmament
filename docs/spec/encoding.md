@@ -1,6 +1,7 @@
 # Canonical Encoding
 
-Format version: `firmament-0` (draft — not frozen until golden vectors land).
+Format version: `firmament-0`, frozen 2026-10-26 (provisional; see
+[Format versions](objects.md#format-versions)).
 
 Every structured object is encoded as restricted, canonical EDN text. For any
 value there is exactly one valid encoding; a decoder must reject any input

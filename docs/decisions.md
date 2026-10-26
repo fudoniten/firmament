@@ -64,3 +64,20 @@ reach the 4096-entry cap and a three-level index.
 **Vector files are plain EDN, pure ASCII.** Non-ASCII characters are
 `\u` escapes, so a value reads the same in any EDN reader; canonical bytes
 are given as hex. The vector files are not themselves canonical EDN.
+
+## 2026-10-26 — `firmament-0` frozen, provisionally
+
+**`firmament-0` is frozen.** The Python reference and the Clojure
+implementation agree on every golden vector, which meets the Phase 0 exit
+criteria. The spec text and vectors for `firmament-0` no longer change.
+
+**Frozen does not mean final.** A later version is expected once the store,
+trees and loader are in real use. Changes go into a new version
+(`firmament-1`, …) with its own spec text and vectors, rather than into
+`firmament-0`, so anything hashed under `firmament-0` keeps its meaning.
+
+**Versions must not share hashes.** A later version that changes any hash
+input also changes the hash prefixes, so a hash identifies its version and
+two versions cannot disagree about what a hash means. The exact scheme waits
+for that version. Until then each store holds a single version and records
+which; data moves between versions only by re-import.
