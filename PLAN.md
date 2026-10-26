@@ -4,17 +4,16 @@ This plan turns the prototype plan in [docs/design.md](docs/design.md) into
 phases with concrete deliverables and exit criteria. The first payoff is
 Phase 4: `run H P` loads and runs an ordinary `deps.edn` project from a hash.
 
-Items marked **(proposed)** are suggestions not settled by the design docs;
-they need a decision before the phase that depends on them.
+Decisions and their reasons are logged in [docs/decisions.md](docs/decisions.md).
 
 ## Guiding rules
 
 - **Formats before code.** Anything that affects a hash is specified and
   covered by golden vectors before an implementation depends on it.
+- **A small core.** The core is three node types and two hash prefixes.
+  Naming, signing and meta-object schemas live outside it.
 - **Defer everything that isn't on the path to "load H and run".** Each phase
   should leave a working, testable tool behind.
-- **Stub the future, don't build it.** Claims, signatures and resolvers get
-  their record shapes and interfaces early, with minimal implementations.
 
 ## Phase 0 — Freeze the format
 
@@ -22,54 +21,35 @@ they need a decision before the phase that depends on them.
 
 **Deliverables**
 
-- `docs/spec/encoding.md` — the canonical encoding.
-- `docs/spec/objects.md` — the five node types plus the `:clj/analysis` node.
-- `docs/spec/chunking.md` — FastCDC variant and parameters.
-- `test-resources/vectors/` — golden vectors: input value, expected canonical
-  bytes, expected hash.
-- A format version identifier recorded in the spec.
+- [x] [docs/spec/encoding.md](docs/spec/encoding.md) — canonical EDN.
+- [x] [docs/spec/objects.md](docs/spec/objects.md) — hashing, trust model,
+      blob / chunked / tree.
+- [x] [docs/spec/chunking.md](docs/spec/chunking.md) — chunker, parameters,
+      gear table, index levels.
+- [x] [docs/spec/clojure.md](docs/spec/clojure.md) — Clojure layer direction
+      (draft; frozen later, in Phases 2–3).
+- [ ] Python reference implementation of encoding, hashing and chunking
+      (`reference/`), independent of the Clojure one.
+- [ ] Golden vectors in `test-resources/vectors/`: values with their canonical
+      bytes and hashes, invalid inputs a decoder must reject, the gear table,
+      and chunking cases (cut points and index roots for generated data).
 
-**Decisions to settle**
+**Decided**
 
-Already decided by the design:
+- Canonical EDN text; booleans allowed, nil forbidden; signed 64-bit integers.
+- Map keys sorted by the bytes of their canonical encoding.
+- Exactly one space as separator; no other whitespace.
+- Fixed string escape table; strings in NFC.
+- Conservative ASCII keyword character set.
+- `#h "sha256:<lowercase hex>"` links; `#b64` byte strings.
+- Two hash prefixes, `blob` and `edn`; object kind given by `:type`.
+- No signatures or names in the core.
+- FastCDC-style chunker fully defined in the spec; files ≤ 256 KiB are blobs;
+  multi-level chunk index with content-defined boundaries.
+- Tree entries: optional `:tags`, every other key a link.
 
-- SHA-256, written `sha256:<hex>`.
-- Type-tagged hash input: `"<type>\n" + payload`.
-- Allowed types: maps, vectors, strings, integers, keywords, byte strings,
-  links. Sorted keys, no whitespace, no floats, strings in Unicode NFC.
-- Blobs are raw bytes; source is hashed as raw bytes, not normalized forms.
-- FastCDC with pinned parameters (example: 16 / 64 / 256 KiB).
-
-Still open:
-
-- [ ] **Booleans and nil.** Not in the allowed type list. Exclude them
-      (encode flags as keywords or by absence) or add them? **(proposed:
-      exclude, and say so explicitly)**
-- [ ] **Key ordering across types.** A total order is needed when a map mixes
-      keywords and strings, e.g. type rank first, then UTF-8 byte order
-      within a type. **(proposed)**
-- [ ] **Byte strings and links in EDN text.** Pick reader tags, e.g. `#h` for
-      links and a tag such as `#b64` for byte strings, plus exact
-      base64/hex alphabets and letter case. **(proposed: lowercase hex for
-      hashes)**
-- [ ] **String escaping and integer range.** Which characters are escaped,
-      and whether integers are arbitrary-precision or capped at 64 bits.
-- [ ] **Keywords.** Namespaced keywords allowed (the design uses them for
-      tags); define the allowed character set.
-- [ ] **Type tags for every node.** `blob`, `tree`, and the tags for
-      chunked, name, claim and analysis nodes.
-- [ ] **Signing input.** Proposed: the canonical encoding of the record with
-      `:sig` removed, and `:prev` is the hash of the full previous record
-      (including its signature). **(proposed)**
-- [ ] **FastCDC details.** Which variant (original or normalized chunking),
-      the gear table, and the small-file threshold below which a file stays a
-      single blob.
-- [ ] **Tree entry keys.** Reserved link keys (`:link`, `:source`,
-      `:children`) vs tag map (`:tags`), and how platform variants
-      (`.clj`/`.cljs`/`.cljc`) are represented: tags or sibling links.
-
-**Exit criteria:** spec reviewed, vectors committed, and every open item above
-checked off or explicitly deferred with a reason.
+**Exit criteria:** the Python reference produces the vectors, the spec text and
+vectors agree, and the format version `firmament-0` is declared frozen.
 
 ## Phase 1 — Store and encoding
 
@@ -79,8 +59,8 @@ checked off or explicitly deferred with a reason.
 
 - Project skeleton: `deps.edn`, test runner, and a Nix flake dev shell.
 - Canonical encoder and a strict decoder that rejects non-canonical input.
-- Hashing with type tags.
-- FastCDC chunker producing chunked-file nodes.
+- Hashing with the two prefixes.
+- Chunker producing multi-level chunked nodes.
 - Local content store: `put`, `get`, `has?`, keyed by hash on disk, with the
   local metadata map (`:pinned?`, `:expires`, `:source`) stored separately and
   never hashed.
@@ -90,27 +70,30 @@ checked off or explicitly deferred with a reason.
 
 **Exit criteria**
 
-- All golden vectors pass, in both encode and decode directions.
+- All golden vectors pass, in both encode and decode directions, and the
+  Clojure and Python implementations agree.
 - Round-trip property tests: decode(encode(v)) = v, and encode is stable.
-- A blob hash matches an independent check (`printf 'blob\n' | cat - file | sha256sum`).
-- Chunking the same bytes always yields the same root hash; an insert in the
-  middle of a large file changes only nearby chunks.
+- A blob hash matches an independent check
+  (`{ printf 'blob\n'; cat file; } | sha256sum`).
+- An insert in the middle of a large file changes only nearby chunks and
+  index nodes.
 
 ## Phase 2 — Trees and import
 
-**Goal:** turn a real `deps.edn` project into a single root hash.
+**Goal:** turn a real `deps.edn` project into a single manifest hash.
 
 **Deliverables**
 
 - Tree construction and path-copying update (change one entry, rewrite only
   the path to the root).
-- Importer: walk a project's source paths and map files to namespace entries
-  (`:source`, `:children`, platform tags); put dependency jars under `:jars`
-  and non-source files under `:resources`.
-- `:clj/analysis` nodes keyed by source hash plus analyzer hash, holding at
-  least `:requires` (via `tools.namespace` or `tools.reader`).
-- Projection: export a tree back to a filesystem layout.
-- CLI: `import <project-dir>` prints the root hash; `ls <hash> [path]`.
+- Importer: read each source file's `ns` form, place its source under the
+  namespace's entry as `:source/clj`, `:source/cljs` or `:source/cljc`; put
+  dependency jars under `:jars` and non-source files under `:resources`; emit a
+  `:clj/manifest`.
+- `:clj/analysis` meta-objects with at least `:requires`, and a way to find
+  them from a source hash.
+- Projection: export a manifest back to a filesystem layout.
+- CLI: `import <project-dir>` prints the manifest hash; `ls <hash> [ns]`.
 
 **Exit criteria**
 
@@ -119,16 +102,20 @@ checked off or explicitly deferred with a reason.
 - Editing one namespace changes only the hashes on its path to the root.
 - Works on at least two real projects, including one with `.cljc` files and
   resources.
+- The Clojure layer in [docs/spec/clojure.md](docs/spec/clojure.md) is frozen.
 
 ## Phase 3 — Loader
 
-**Goal:** `require` a namespace from a root hash with no filesystem checkout.
+**Goal:** `require` a namespace from a manifest hash with no filesystem
+checkout.
 
 **Deliverables**
 
-- Root binding: `*ns-root*` bound to a root hash for a load session.
-- A classloader that serves `my/app.clj` (and resources) from the tree, so
-  `require`, `io/resource` and existing tooling work unmodified.
+- Root binding: `*ns-root*` bound to a manifest hash for a load session.
+- A namespace-native `require` for our own code.
+- A compatibility classloader that maps path requests (`my/app_server.clj`)
+  back to namespaces and serves the right platform source, so
+  `clojure.core/require`, `io/resource` and existing tooling work unmodified.
 - Jars from `:jars` made available to the classloader.
 
 **Technical risks to resolve early**
@@ -143,9 +130,9 @@ checked off or explicitly deferred with a reason.
   namespaces already loaded. This is the expected one-version-per-JVM limit;
   document it rather than work around it.
 
-**Exit criteria:** a REPL started with nothing but the store and a root hash
-can `(require 'my.app)` and call into it, including a dependency from a jar
-and a resource lookup.
+**Exit criteria:** a REPL started with nothing but the store and a manifest
+hash can `(require 'my.app)` and call into it, including a dependency from a
+jar and a resource lookup.
 
 ## Phase 4 — Runner (first payoff)
 
@@ -153,7 +140,7 @@ and a resource lookup.
 
 **Deliverables**
 
-- Entry point taken from an entry tag on the manifest.
+- Entry point taken from the manifest's `:clj/main` tag.
 - Closure prefetch driven by analysis `:requires` lists, so a cold start
   fetches everything it needs without parsing source.
 - Per-node parameters P as their own (private) hash, passed to the entry point.
@@ -165,39 +152,31 @@ and a resource lookup.
   starts the program.
 - Changing one namespace and running H¹ transfers only the changed objects.
 
-## Phase 5 — Names and serving
+## Phase 5 — Serving
 
-**Goal:** a second machine can `run prod.my-service`.
+**Goal:** a second machine can run a hash published by the first.
 
 **Deliverables**
 
 - HTTP blob server: `GET /<hash>`, plus `PUT` for authorized pushes.
 - HTTP resolver, so the stack is local store → remote server.
-- ed25519 keys, signed name records, and append-only chain verification
-  (sequence, `:prev` link, signature).
-- A simple hosted name service: get the latest record, append a record.
-- Claim records with signature verification stubbed (shape only, no policy).
-- CLI: `name set <name> <hash>`, `name get <name>`, `run <name>`.
+- Every fetched object verified against its hash.
 
 **Exit criteria**
 
-- Machine A imports a project and sets `prod.my-service`; machine B runs it by
-  name.
-- Updating the name and re-running on B picks up the new hash, and the full
-  chain verifies.
-- Tampering with any record or blob is detected.
+- Machine A imports a project and serves it; machine B runs it by hash.
+- Tampering with any served object is detected.
 
 ## Deferred
 
-These stay out of scope until the phases above are done:
-
 | Item | Interim stand-in |
 | --- | --- |
+| Signed names | A root hash handed over by any means (DNS, web service, paper) |
+| Signing and attestation of meta-objects | Unsigned meta-objects; trust whoever gave you the root |
 | Global DHT | Local store plus HTTP `GET /<hash>` |
-| Trust policy | Claim shapes defined, verification stubbed |
+| `data_readers.clj(c)` | Unsupported; programs relying on library tagged literals won't load |
 | Live upgrade (diff H → H¹, reload) | Restart on upgrade |
 | Data migration declarations | None |
-| Name-chain merging | Single writer per name |
 | GC and retention | Pins only, no collection |
 | Privacy gateways | Private content served only from your own host |
 | Normalized source forms | Raw source bytes |
@@ -211,7 +190,7 @@ state.
 
 Carried from the design and not blocking the phases above:
 
-- How two devices that advanced the same name chain reconcile.
+- How two devices that advanced the same state independently reconcile.
 - Revocation of leaked secrets or unlawful content in immutable history.
 - A checkpointing overlay filesystem for POSIX apps that write constantly.
 - Where the reproducibility boundary sits (firmware, drivers, time, network).

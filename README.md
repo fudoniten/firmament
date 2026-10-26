@@ -3,8 +3,9 @@
 **Content-addressed computing, starting with Clojure.**
 
 Firmament stores everything — code, builds, systems, user state — as immutable
-values named by the hash of their content. The only mutable things are a few
-signed, append-only *name chains* that point at hashes. Version control,
+values named by the hash of their content. Naming lives outside the core:
+anything that hands you a root hash (a DNS record, a web service, a note on
+paper) is enough, and everything under it is verified by hashing. Version control,
 rollback, reproducibility and sharing stop being separate tools and become
 properties of the medium.
 
@@ -29,8 +30,9 @@ Firmament replaces places with values:
 - A **build** is a cached function: `compile(source-hash, target) → binary-hash`.
 - A **system** is a higher-level hash; your machine is that hash plus an
   overlay of your changes.
-- A few **signed names** (`prod.my-service`, `me.my-domain.com`) are the only
-  mutable things, and each keeps its own history.
+- **Names** (`prod.my-service`, `me.my-domain.com`) are just pointers to root
+  hashes, kept outside the core; signed, historied names can be layered on
+  later.
 
 That makes possible: deploy by naming ("run H", then "run H¹"), live upgrades
 that reload only changed namespaces, "try my system" by sending a hash, and
@@ -41,8 +43,8 @@ technical design is in [docs/design.md](docs/design.md).
 
 ## Principles
 
-1. **Values over places.** Identity is content. Mutation is confined to a few
-   explicit, signed, historied names.
+1. **Values over places.** Identity is content. Mutation is confined to the
+   pointers that name root hashes.
 2. **Open top to bottom.** Every layer is source you can inspect, change and
    rebuild.
 3. **Practical over pure.** Central services, caches and today's trust models
@@ -50,8 +52,9 @@ technical design is in [docs/design.md](docs/design.md).
    foundation.
 4. **Local first, self-hostable.** Your drives are your cache; your servers can
    be your resolvers.
-5. **Verify, don't trust, by default.** Content checks itself; signatures are
-   needed only for names and claims a hash can't prove.
+5. **Verify, don't trust, by default.** Content checks itself. Trust comes
+   from whoever gave you the root hash; signing and attestation can be built on
+   top.
 6. **Evolve, don't legislate.** Freeze data formats carefully; let policy
    (trust, merging, retention) grow from real use.
 
@@ -60,15 +63,15 @@ technical design is in [docs/design.md](docs/design.md).
 | Concept | What it is |
 | --- | --- |
 | **Blob** | Raw bytes, hashed as `"blob\n" + bytes`. |
-| **Chunked file** | A large file split by FastCDC into chunk blobs, with sizes for range reads. |
-| **Tree** | A map of names to entries; each entry has tags and named links. Directories, namespace trees, manifests and distros are all trees. |
-| **Name record** | One entry in a signed, append-only chain mapping a name to a hash. |
-| **Claim** | A signed statement about a hash (`:compiled-to`, `:retained-until`, …). |
+| **Chunked file** | A file over 256 KiB, split by a FastCDC-style chunker into chunk blobs, with sizes for range reads. |
+| **Tree** | A map of names to entries; each entry has optional tags and named links. Directories and namespace trees are trees. |
 | **Link** | A distinct type, `#h "sha256:…"`, so closures can be walked without a schema. |
+| **Meta-object** | An ordinary object that links to what it describes (`compiled-to`, namespace analysis, …). Its schema is outside the core. |
 | **Resolver stack** | RAM → disk → LAN → mirrors → private gateway → DHT. Any source may be untrusted, since content self-verifies. |
 
-Objects are encoded as restricted, canonical EDN (sorted keys, no whitespace,
-integers only), and hashes are written `sha256:<hex>`.
+Structured objects are restricted, canonical EDN, hashed as
+`"edn\n" + bytes`; hashes are written `sha256:<hex>`. The spec is in
+[docs/spec/](docs/spec/).
 
 ### Namespaces as trees
 
@@ -92,10 +95,10 @@ The first milestone is *"load H and run"* for an ordinary `deps.edn` project:
 2. **Trees and import.** Turn a `deps.edn` project into a namespace tree plus `:jars` and `:resources`.
 3. **Loader.** Serve namespaces from a root hash so `require` and existing tooling work unmodified.
 4. **Runner.** `run H P`: prefetch the closure, load, call the entry point.
-5. **Names and serving.** Signed name chains and an HTTP blob server, so a second machine can `run prod.my-service`.
+5. **Serving.** An HTTP blob server, so a second machine can run a hash published by the first.
 
-Deliberately deferred: the DHT, trust policy, merging, GC, privacy gateways and
-live upgrade. See [PLAN.md](PLAN.md) for phases, deliverables and exit
+Deliberately deferred: signed names, attestation, the DHT, merging, GC,
+privacy gateways and live upgrade. See [PLAN.md](PLAN.md) for phases, deliverables and exit
 criteria.
 
 ## Repository layout
@@ -105,10 +108,16 @@ README.md            this file
 PLAN.md              phased implementation plan
 docs/
   what-and-why.md    motivation, principles, lineage, non-goals
-  design.md          data model, namespaces, trust, prototype plan
+  design.md          original design summary
+  decisions.md       dated decision log, incl. departures from design.md
+  spec/
+    encoding.md      canonical EDN
+    objects.md       hashing, trust model, core node types
+    chunking.md      chunker and chunk index
+    clojure.md       Clojure layer (draft)
 ```
 
-Planned additions as phases land: `docs/spec/` (the frozen format spec),
+Planned additions: `reference/` (Python reference implementation),
 `test-resources/vectors/` (golden vectors), `src/` and `test/`.
 
 ## Lineage
@@ -127,4 +136,4 @@ with a practical naming layer.
   down the stack.
 - Storing hot state (databases, logs) in the tree.
 - Multiple versions of a library in one JVM.
-- Solving trust and governance up front.
+- Solving trust and governance up front, or building signing into the core.
