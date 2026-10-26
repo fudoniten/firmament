@@ -18,15 +18,16 @@
           helpers = fudo-nix-helpers.legacyPackages.${system};
         }));
     in {
-      # nix build
+      # nix build; nix run . -- put FILE
       packages = forAllSystems (f: {
         default = f.firmament;
-        inherit (f) firmament;
+        inherit (f) firmament firmament-lib;
       });
 
       # nix flake check
       checks = forAllSystems (f: {
-        inherit (f) firmament clojure-tests reference-tests vectors-current;
+        inherit (f) firmament firmament-lib cli-smoke clojure-tests reference-tests
+          vectors-current;
       });
 
       # nix run .#update-deps    (after changing deps.edn)

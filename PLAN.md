@@ -59,16 +59,16 @@ vectors agree, and the format version `firmament-0` is declared frozen.
 
 **Deliverables**
 
-- Project skeleton: `deps.edn`, test runner, and a Nix flake dev shell.
-- Canonical encoder and a strict decoder that rejects non-canonical input.
-- Hashing with the two prefixes.
-- Chunker producing multi-level chunked nodes.
-- Local content store: `put`, `get`, `has?`, keyed by hash on disk, with the
-  local metadata map (`:pinned?`, `:expires`, `:source`) stored separately and
-  never hashed.
-- Resolver protocol, with the local store as the first implementation.
-- Link walker: collect every link in an object without a schema.
-- A minimal CLI: `put <file>`, `get <hash>`, `cat <hash>`.
+- [x] Project skeleton: `deps.edn`, test runner, and a Nix flake dev shell.
+- [x] Canonical encoder and a strict decoder that rejects non-canonical input.
+- [x] Hashing with the two prefixes.
+- [x] Chunker producing multi-level chunked nodes.
+- [x] Local content store: `put`, `get`, `has?`, keyed by hash on disk, with the
+      local metadata map (`:pinned?`, `:expires`, `:source`) stored separately and
+      never hashed.
+- [x] Resolver protocol, with the local store as the first implementation.
+- [x] Link walker: collect every link in an object without a schema.
+- [x] A minimal CLI: `put <file>`, `get <hash>`, `cat <hash>`.
 
 **Exit criteria**
 

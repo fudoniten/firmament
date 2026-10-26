@@ -14,8 +14,8 @@ can be told *"load H and run"*, and upgraded by diffing H against its
 successor.
 
 > **Status:** pre-alpha. The data formats are frozen as the provisional
-> version `firmament-0`, with encoding, hashing and chunking implemented; the
-> store and CLI come next. See [PLAN.md](PLAN.md).
+> version `firmament-0`. Encoding, hashing, chunking and a local store work,
+> with a small `firmament put`/`get`/`cat` command. See [PLAN.md](PLAN.md).
 
 ## Why
 
@@ -115,6 +115,7 @@ docs/
     encoding.md      canonical EDN
     objects.md       hashing, trust model, core node types
     chunking.md      chunker and chunk index
+    store.md         local store layout (local state, not hashed)
     clojure.md       Clojure layer (draft)
 deps.edn             Clojure project
 deps-lock.json       pinned Clojure dependencies, for Nix builds
@@ -124,6 +125,9 @@ src/firmament/
   edn.clj            canonical EDN encoder and strict decoder
   hash.clj           blob and structured-object hashes
   chunk.clj          chunker and chunk index
+  resolver.clj       fetching objects and files by hash
+  store.clj          local content store
+  cli.clj            the `firmament` command
 test/                Clojure tests, including the golden vectors
 reference/           Python reference implementation and vector generator
 test-resources/
@@ -139,12 +143,17 @@ CLI and Python 3 yourself. Then:
 clojure -M:test                                         # Clojure tests
 python3 reference/gen_vectors.py --check                # vectors are current
 (cd reference && python3 -m unittest discover -s tests -t .)
+clojure -M -m firmament.cli put FILE                    # run the command
 ```
+
+The command keeps its store in `--store DIR`, `$FIRMAMENT_STORE` or
+`~/.firmament/store`; see [docs/spec/store.md](docs/spec/store.md).
 
 With Nix:
 
 ```
-nix build                 # the library jar
+nix build                 # the `firmament` command (.#firmament-lib: the jar)
+nix run . -- put FILE     # store FILE, print its hash; also get HASH, cat HASH
 nix flake check           # all of the above, offline, in the Nix sandbox
 nix run .#update-deps     # regenerate deps-lock.json after editing deps.edn
 ```
