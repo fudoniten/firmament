@@ -1,0 +1,10 @@
+{:paths ["src"]
+ ;; Keep org.clojure/clojure at the version nixpkgs' Clojure CLI uses for its
+ ;; root deps, so deps-lock.json also covers `clojure -T:build` in Nix.
+ :deps {org.clojure/clojure {:mvn/version "1.12.5"}}
+ :aliases
+ ;; Only Maven dependencies, so the Nix build can fetch them all up front
+ ;; (see flake.nix).
+ {:test {:extra-paths ["test" "test-resources"]
+         :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}}
+         :main-opts ["-m" "firmament.test-runner"]}}}

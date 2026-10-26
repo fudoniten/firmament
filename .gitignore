@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+.cpcache/
+.nrepl-port
+result
+result-*

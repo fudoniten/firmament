@@ -115,12 +115,41 @@ docs/
     objects.md       hashing, trust model, core node types
     chunking.md      chunker and chunk index
     clojure.md       Clojure layer (draft)
+deps.edn             Clojure project
+deps-lock.json       pinned Clojure dependencies, for Nix builds
+flake.nix            Nix build, checks and dev shell
+nix/                 Nix derivations used by flake.nix
+src/firmament/
+  edn.clj            canonical EDN encoder and strict decoder
+  hash.clj           blob and structured-object hashes
+test/                Clojure tests, including the golden vectors
 reference/           Python reference implementation and vector generator
 test-resources/
   vectors/           golden vectors
 ```
 
-Planned additions: `src/` and `test/`.
+## Development
+
+Enter the dev shell with `nix develop`, or install a JDK (21+), the Clojure
+CLI and Python 3 yourself. Then:
+
+```
+clojure -M:test                                         # Clojure tests
+python3 reference/gen_vectors.py --check                # vectors are current
+(cd reference && python3 -m unittest discover -s tests -t .)
+```
+
+With Nix:
+
+```
+nix build                 # the library jar
+nix flake check           # all of the above, offline, in the Nix sandbox
+nix run .#update-deps     # regenerate deps-lock.json after editing deps.edn
+```
+
+The Nix builds use [fudo-nix-helpers](https://github.com/fudoniten/fudo-nix-helpers),
+which builds from the artifacts pinned in `deps-lock.json`. CI runs every
+check above on each pull request, and fails if `deps-lock.json` is stale.
 
 ## Lineage
 
