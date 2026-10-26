@@ -15,6 +15,10 @@ so that stores stay readable across versions of this code.
   tmp/                files being written
 ```
 
+**Where the store is.** Tools use the directory named by the
+`FIRMAMENT_STORE` environment variable, or `~/.firmament/store` when it is
+unset (`firmament.store/default-dir`). The CLI's `--store DIR` overrides both.
+
 An object named `sha256:abcdef…` lives at `objects/ab/cdef…`: the first two
 hex digits name the directory and the other 62 the file.
 

@@ -94,6 +94,14 @@
   ^Path [^LocalStore s]
   (.-root s))
 
+(defn default-dir
+  "Where the store is when no directory is given: $FIRMAMENT_STORE, else
+  ~/.firmament/store. `env` is a map of environment variables."
+  ([] (default-dir (System/getenv)))
+  ([env]
+   (or (not-empty (get env "FIRMAMENT_STORE"))
+       (str (System/getProperty "user.home") "/.firmament/store"))))
+
 (defn open
   "Open the store in directory `dir`, creating it if it doesn't exist or is
   empty. Throws if `dir` holds something else, or a store for another

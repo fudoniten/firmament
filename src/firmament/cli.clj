@@ -23,12 +23,8 @@ Commands:
 The store is DIR if given, else $FIRMAMENT_STORE, else ~/.firmament/store.
 HASH is written sha256:<hex>.")
 
-(defn- default-store [env]
-  (or (get env "FIRMAMENT_STORE")
-      (str (System/getProperty "user.home") "/.firmament/store")))
-
 (defn- parse-args [args env]
-  (loop [args args opts {:store (default-store env)}]
+  (loop [args args opts {:store (store/default-dir env)}]
     (let [[a b & more] args]
       (cond
         (= "--store" a) (if b (recur more (assoc opts :store b)) (assoc opts :error "--store needs a directory"))

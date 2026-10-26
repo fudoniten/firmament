@@ -114,3 +114,9 @@
       (Files/write (.resolve dir "other") (utf8 "x") ^"[Ljava.nio.file.OpenOption;" (make-array OpenOption 0))
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a firmament store"
                             (store/open dir))))))
+
+(deftest default-dir
+  (is (= "/srv/fm" (store/default-dir {"FIRMAMENT_STORE" "/srv/fm"})))
+  (is (= (str (System/getProperty "user.home") "/.firmament/store")
+         (store/default-dir {})
+         (store/default-dir {"FIRMAMENT_STORE" ""}))))
