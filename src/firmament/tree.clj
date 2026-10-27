@@ -1,7 +1,8 @@
 (ns firmament.tree
   "Trees (docs/spec/objects.md): building and checking them, looking paths
   up, path-copying updates, and moving directories in and out of the store."
-  (:require [firmament.edn :as edn]
+  (:require [clojure.string :as str]
+            [firmament.edn :as edn]
             [firmament.resolver :as resolver]
             [firmament.store :as store])
   (:import (java.nio.file Files LinkOption OpenOption Path Paths)
@@ -20,10 +21,8 @@
   and not `.` or `..`."
   [s]
   (and (string? s)
-       (not= "" s)
-       (not= "." s)
-       (not= ".." s)
-       (not (.contains ^String s "/"))
+       (not (#{"" "." ".."} s))
+       (not (str/includes? s "/"))
        (Normalizer/isNormalized s Normalizer$Form/NFC)))
 
 (defn- check-entry [name entry]
@@ -31,11 +30,10 @@
     (fail (str "invalid entry name: " (pr-str name)) {:name name}))
   (when-not (map? entry)
     (fail (str "entry " (pr-str name) " is not a map") {:name name :entry entry}))
-  (let [tags (:tags entry ::none)
+  (let [{:keys [tags]} entry
         links (dissoc entry :tags)]
-    (when-not (= ::none tags)
-      (when-not (and (map? tags) (seq tags)
-                     (every? #(and (keyword? %) (namespace %)) (keys tags)))
+    (when (contains? entry :tags)
+      (when-not (and (map? tags) (seq tags) (every? qualified-keyword? (keys tags)))
         (fail (str "entry " (pr-str name) " has invalid :tags; they must be a non-empty"
                    " map with namespaced keyword keys")
               {:name name :tags tags})))
@@ -145,6 +143,21 @@
 
 (defn- file-name ^String [^Path p] (str (.getFileName p)))
 
+(declare import-dir!)
+
+(defn- path-entry
+  "The tree entry for the file or directory at `p`, storing its contents."
+  [s ^Path p]
+  (cond
+    (Files/isSymbolicLink p)
+    (fail (str "symbolic links are not supported: " p) {:path (str p)})
+
+    (Files/isDirectory p no-follow) {:children (import-dir! s p)}
+
+    (Files/isRegularFile p no-follow) {:link (store/put-file! s (Files/readAllBytes p))}
+
+    :else (fail (str "not a regular file or directory: " p) {:path (str p)})))
+
 (defn import-dir!
   "Store the directory `dir` as a tree, recursively: each file becomes an
   entry {:link <file>} and each subdirectory {:children <tree>}. Names are
@@ -156,21 +169,12 @@
       (fail (str "not a directory: " dir) {:path (str dir)}))
     (let [children (with-open [ls (Files/list dir)] (vec (iterator-seq (.iterator ls))))
           entries (reduce
-                   (fn [entries ^Path p]
-                     (let [name (Normalizer/normalize (file-name p) Normalizer$Form/NFC)
-                           entry (cond
-                                   (Files/isSymbolicLink p)
-                                   (fail (str "symbolic links are not supported: " p) {:path (str p)})
-                                   (Files/isDirectory p no-follow)
-                                   {:children (import-dir! s p)}
-                                   (Files/isRegularFile p no-follow)
-                                   {:link (store/put-file! s (Files/readAllBytes p))}
-                                   :else
-                                   (fail (str "not a regular file or directory: " p) {:path (str p)}))]
+                   (fn [entries p]
+                     (let [name (Normalizer/normalize (file-name p) Normalizer$Form/NFC)]
                        (when (contains? entries name)
                          (fail (str "two names in " dir " are the same after NFC: " (pr-str name))
                                {:path (str dir) :name name}))
-                       (assoc entries name entry)))
+                       (assoc entries name (path-entry s p))))
                    {} children)]
       (edn/link (store/put-value! s (tree entries))))))
 
@@ -187,18 +191,13 @@
       (fail (str dir " exists and is not an empty directory") {:path (str dir)}))
     (Files/createDirectories dir (make-array FileAttribute 0))
     (doseq [[name entry] (:entries (get-tree r link))]
-      (let [target (.resolve dir ^String name)]
-        (cond
-          (= #{:children} (set (keys (dissoc entry :tags))))
-          (export! r (:children entry) target)
-
-          (= #{:link} (set (keys (dissoc entry :tags))))
-          (with-open [out (Files/newOutputStream target (make-array OpenOption 0))]
-            (resolver/write-file! r (:link entry) out))
-
-          :else
-          (fail (str "entry " (pr-str name) " has links "
-                     (vec (sort (keys (dissoc entry :tags))))
+      (let [target (.resolve dir ^String name)
+            link-keys (set (keys (dissoc entry :tags)))]
+        (case link-keys
+          #{:children} (export! r (:children entry) target)
+          #{:link} (with-open [out (Files/newOutputStream target (make-array OpenOption 0))]
+                     (resolver/write-file! r (:link entry) out))
+          (fail (str "entry " (pr-str name) " has links " (vec (sort link-keys))
                      "; only :link or :children can be written to a directory")
                 {:name name :entry entry}))))))
 

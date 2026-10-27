@@ -131,3 +131,8 @@
     (is (= #{a b} (edn/links {:type :tree
                               :entries {"x" {:link a :tags {:t/v [b a]}}}
                               a "links as map keys count too"})))))
+
+(deftest unpaired-surrogates
+  (doseq [s ["a\uD800" "\uDC00b" "\uDC00\uD800"]]
+    (is (= :encode (error-kind #(edn/encode s))) (pr-str s)))
+  (is (edn/encode "😀") "a pair is fine"))

@@ -1,6 +1,5 @@
 (ns firmament.store-test
-  (:require [clojure.set :as set]
-            [clojure.test :refer [deftest is testing]]
+  (:require [clojure.test :refer [deftest is testing]]
             [firmament.edn :as edn]
             [firmament.gen :as gen]
             [firmament.hash :as hash]
@@ -22,15 +21,16 @@
 
 (defn- object-file ^Path [s ref]
   (let [h (subs ref (count "sha256:"))]
-    (.resolve (store/root s) (str "objects/" (subs h 0 2) "/" (subs h 2)))))
+    (.resolve ^Path (:root s) (str "objects/" (subs h 0 2) "/" (subs h 2)))))
 
 (deftest blobs
   (let [s (store/open (temp-dir))
         ref (store/put-blob! s (utf8 "hello\n"))]
     (is (= "sha256:1be8615f7fbda85e1ef029f02573bdfefe09fb01af39e6ce684104a45a360ae8" ref))
     (is (store/has? s ref))
-    (is (= {:kind :blob :hex "68656c6c6f0a"}
-           (-> (store/get-object s ref) (update :bytes hex) (set/rename-keys {:bytes :hex}))))
+    (let [{:keys [kind bytes]} (store/get-object s ref)]
+      (is (= :blob kind))
+      (is (= "68656c6c6f0a" (hex bytes))))
     (testing "the object file is the hash input, so sha256sum of it is the hash"
       (let [data (Files/readAllBytes (object-file s ref))]
         (is (= (str "sha256:" (hex (.digest (MessageDigest/getInstance "SHA-256") data))) ref))
@@ -93,7 +93,7 @@
     (is (= {:pinned? true} (store/update-meta! s ref assoc :pinned? true)))
     (store/update-meta! s ref assoc :source (edn/link ref) :expires #inst "2030-01-01")
     (is (= {:pinned? true :source (edn/link ref) :expires #inst "2030-01-01"}
-           (store/object-meta (store/open (store/root s)) ref)))
+           (store/object-meta (store/open (:root s)) ref)))
     (testing "metadata never changes the object"
       (is (= ref (hash/blob-hash (:bytes (store/get-object s ref))))))
     (is (thrown? clojure.lang.ExceptionInfo

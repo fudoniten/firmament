@@ -6,6 +6,7 @@
             [firmament.store :as store]
             [firmament.tree :as tree])
   (:import (java.io OutputStream PrintStream)
+           (java.nio.charset StandardCharsets)
            (java.nio.file Files Paths))
   (:gen-class))
 
@@ -47,38 +48,73 @@ HASH is written sha256:<hex>.")
 (defn- read-path ^bytes [^String f]
   (Files/readAllBytes (Paths/get f (make-array String 0))))
 
+(defn- usage-error [msg]
+  (throw (ex-info msg {::usage true})))
+
+(defn- hash-arg
+  "The single hash in `args`, as a link."
+  [command args]
+  (when-not (= 1 (count args))
+    (usage-error (str command " takes one hash")))
+  (edn/link (first args)))
+
+;; Each command takes the store, its arguments and the output stream. A
+;; command that returns lines has them printed; the others write to `out`
+;; themselves.
+
+(defn- put-command [s args _]
+  (cond
+    (= "-r" (first args))
+    (do (when-not (= 2 (count args))
+          (usage-error "put -r takes one directory"))
+        [(edn/link-ref (tree/import-dir! s (second args)))])
+
+    (empty? args) (usage-error "put needs at least one file")
+
+    :else (mapv #(edn/link-ref (store/put-file! s (read-path %))) args)))
+
+(defn- get-command [s args ^OutputStream out]
+  (.write out ^bytes (:bytes (resolver/fetch! s (edn/link-ref (hash-arg "get" args)))))
+  nil)
+
+(defn- cat-command [s args out]
+  (resolver/write-file! s (hash-arg "cat" args) out)
+  nil)
+
+(defn- ls-line [name [k link]]
+  (str (edn/link-ref link) "  " name
+       (case k :link "" :children "/" (str "  " k))))
+
+(defn- ls-command [s [h path & more] _]
+  (when (or (nil? h) (seq more))
+    (usage-error "ls takes a hash and an optional path"))
+  (for [[name entry] (tree/ls s (edn/link h) (parse-path path))
+        link (sort-by key (dissoc entry :tags))]
+    (ls-line name link)))
+
+(defn- export-command [s args _]
+  (when-not (= 2 (count args))
+    (usage-error "export takes a hash and a directory"))
+  (tree/export! s (edn/link (first args)) (second args))
+  nil)
+
+(def ^:private commands
+  {"put" put-command
+   "get" get-command
+   "cat" cat-command
+   "ls" ls-command
+   "export" export-command})
+
 (defn- run-command [s command args ^OutputStream out]
-  (let [ps (PrintStream. out true "UTF-8")
-        one-hash (fn []
-                   (when-not (= 1 (count args))
-                     (throw (ex-info (str command " takes one hash") {::usage true})))
-                   (edn/link-ref (edn/link (first args))))]
-    (case command
-      "put" (cond
-              (= "-r" (first args))
-              (do (when-not (= 2 (count args))
-                    (throw (ex-info "put -r takes one directory" {::usage true})))
-                  (.println ps (edn/link-ref (tree/import-dir! s (second args)))))
+  (doseq [line ((commands command) s args out)]
+    (.write out (.getBytes (str line "\n") StandardCharsets/UTF_8)))
+  (.flush out))
 
-              (empty? args)
-              (throw (ex-info "put needs at least one file" {::usage true}))
-
-              :else
-              (doseq [f args]
-                (.println ps (edn/link-ref (store/put-file! s (read-path f))))))
-      "get" (.write out ^bytes (:bytes (resolver/fetch! s (one-hash))))
-      "cat" (resolver/write-file! s (edn/link (one-hash)) out)
-      "ls" (let [[h path & more] args]
-             (when (or (nil? h) (seq more))
-               (throw (ex-info "ls takes a hash and an optional path" {::usage true})))
-             (doseq [[name entry] (tree/ls s (edn/link h) (parse-path path))
-                     [k link] (sort-by key (dissoc entry :tags))]
-               (.println ps (str (edn/link-ref link) "  " name
-                                 (case k :link "" :children "/" (str "  " k))))))
-      "export" (do (when-not (= 2 (count args))
-                     (throw (ex-info "export takes a hash and a directory" {::usage true})))
-                   (tree/export! s (edn/link (first args)) (second args))))
-    (.flush out)))
+(defn- complain
+  "Print `msg` to `err`, followed by the usage text if `usage?`."
+  [^PrintStream err msg usage?]
+  (.println err (str "firmament: " msg))
+  (when usage? (.println err ^String usage)))
 
 (defn run
   "Run the command line `args`, writing output to `out` and messages to
@@ -88,18 +124,18 @@ HASH is written sha256:<hex>.")
   (let [{:keys [store command args error help]} (parse-args args env)]
     (cond
       help (do (.println err ^String usage) 0)
-      error (do (.println err (str "firmament: " error)) (.println err ^String usage) 2)
-      (not (#{"put" "get" "cat" "ls" "export"} command))
-      (do (.println err (str "firmament: unknown command: " command)) (.println err ^String usage) 2)
+      error (do (complain err error true) 2)
+      (not (contains? commands command))
+      (do (complain err (str "unknown command: " command) true) 2)
       :else
       (try
         (run-command (store/open store) command args out)
         0
         (catch clojure.lang.ExceptionInfo e
-          (.println err (str "firmament: " (ex-message e)))
+          (complain err (ex-message e) false)
           (if (::usage (ex-data e)) 2 1))
         (catch java.io.IOException e
-          (.println err (str "firmament: " (str/trim (str (.getClass e) ": " (ex-message e)))))
+          (complain err (str (.getName (class e)) ": " (ex-message e)) false)
           1)))))
 
 (defn -main [& args]
