@@ -110,3 +110,25 @@
   (let [out (ByteArrayOutputStream.)]
     (write-file! r link out)
     (.toByteArray out)))
+
+;; ----------------------------------------------------------- filesystem
+
+(defmulti export!
+  "Write `node` out as directory `dir`, which must not exist or be empty, in
+  the form its type has on a filesystem: a tree as a directory, a Clojure
+  manifest as a project. Children are read from `r`."
+  (fn [_r node _dir] (node-type node)))
+
+(defmethod export! :default [_ node _]
+  (fail (str "a " (pr-str (node-type node)) " node has no directory form")
+        {:type (node-type node)}))
+
+(defmulti listing
+  "What `node` holds, for `firmament ls`: a sequence of maps with :name, :key
+  (the link key, such as :link or :children) and :link. `path` is a vector
+  of names narrowing the listing, as each type defines."
+  (fn [_r node _path] (node-type node)))
+
+(defmethod listing :default [_ node _]
+  (fail (str "a " (pr-str (node-type node)) " node can't be listed")
+        {:type (node-type node)}))

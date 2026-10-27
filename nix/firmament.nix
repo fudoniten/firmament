@@ -45,7 +45,8 @@ in rec {
     src = libSrc;
   };
 
-  # Put files and a directory through the built command and read them back.
+  # Put files, a directory and a project through the built command and read
+  # them back.
   cli-smoke = pkgs.runCommand "firmament-cli-smoke"
     { nativeBuildInputs = [ firmament ]; } ''
       export FIRMAMENT_STORE=$PWD/store
@@ -61,6 +62,10 @@ in rec {
       firmament export "$tree" out
       diff -r dir out
       [ "$(firmament put -r out)" = "$tree" ]
+      manifest=$(firmament import ${../test-resources/projects/sample})
+      firmament ls "$manifest" | grep -q 'sample.util  :source/cljc'
+      firmament export "$manifest" project
+      [ "$(firmament import project)" = "$manifest" ]
       touch $out
     '';
 

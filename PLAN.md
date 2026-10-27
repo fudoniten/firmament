@@ -88,14 +88,14 @@ vectors agree, and the format version `firmament-0` is declared frozen.
 
 - [x] Tree construction and path-copying update (change one entry, rewrite only
   the path to the root).
-- Importer: read each source file's `ns` form, place its source under the
+- [x] Importer: read each source file's `ns` form, place its source under the
   namespace's entry as `:source/clj`, `:source/cljs` or `:source/cljc`; put
   dependency jars under `:jars` and non-source files under `:resources`; emit a
   `:clj/manifest`.
-- `:clj/analysis` meta-objects with at least `:requires`, and a way to find
-  them from a source hash.
-- Projection: export a manifest back to a filesystem layout.
-- CLI: `import <project-dir>` prints the manifest hash; `ls <hash> [ns]`.
+- [x] `:clj/analysis` meta-objects with at least `:requires`, and a way to find
+      them from a source hash.
+- [x] Projection: export a manifest back to a filesystem layout.
+- [x] CLI: `import <project-dir>` prints the manifest hash; `ls <hash> [ns]`.
 
 **Exit criteria**
 

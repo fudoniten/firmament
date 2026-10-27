@@ -71,3 +71,18 @@
     (is (= 1 (:code (run store "ls" root "missing"))))
     (is (= 2 (:code (run store "put" "-r"))))
     (is (= 2 (:code (run store "export" root))))))
+
+(deftest projects
+  (let [store (temp-dir)
+        {:keys [code out err]} (run store "import" "test-resources/projects/sample")
+        root (str/trim (String. ^bytes out "UTF-8"))]
+    (is (= 0 code) err)
+    (let [lines (str/split-lines (String. ^bytes (:out (run store "ls" root)) "UTF-8"))]
+      (is (some #(str/ends-with? % "  sample.util  :source/cljc") lines))
+      (is (some #(str/ends-with? % "  resources  :resources") lines)))
+    (is (= 2 (count (str/split-lines (String. ^bytes (:out (run store "ls" root "sample.core")) "UTF-8")))))
+    (let [target (.resolve (temp-dir) "out")]
+      (is (= 0 (:code (run store "export" root (str target)))))
+      (is (= root (str/trim (String. ^bytes (:out (run store "import" (str target))) "UTF-8")))))
+    (is (= 2 (:code (run store "import"))))
+    (is (= 2 (:code (run store "import" "x" "--bogus" "y"))))))

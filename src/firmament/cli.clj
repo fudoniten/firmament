@@ -1,6 +1,7 @@
 (ns firmament.cli
   "The `firmament` command: put files into the local store and read them back."
   (:require [clojure.string :as str]
+            [firmament.clojure :as clj]
             [firmament.edn :as edn]
             [firmament.node :as node]
             [firmament.storage :as storage]
@@ -23,13 +24,18 @@ Commands:
                 canonical EDN
   cat HASH      print the contents of the file at HASH (a blob or a chunked
                 file)
+  import DIR [--classpath CP]
+                import the deps.edn project in DIR; print its manifest's hash.
+                Jars come from CP (e.g. the output of clojure -Spath) and from
+                :local/root jar deps
   ls HASH [PATH]
-                list the tree at HASH, or the subtree at PATH (a/b/c) below it:
-                one line per link, <hash>  <name>, with / after
-                subtrees and the key after links other than :link
+                list a tree, or the subtree at PATH (a/b/c) below it; or list
+                a manifest's namespaces, or the one named PATH. One line per
+                link, <hash>  <name>, with / after subtrees and the key after
+                links other than :link
   export HASH DIR
-                write the tree at HASH out as directory DIR, which must not
-                exist or be empty
+                write a tree out as directory DIR, or a manifest out as a
+                project; DIR must not exist or be empty
 
 The store is DIR if given, else $FIRMAMENT_STORE, else ~/.firmament/store.
 HASH is written sha256:<hex>.")
@@ -82,27 +88,33 @@ HASH is written sha256:<hex>.")
   (node/write-file! s (hash-arg "cat" args) out)
   nil)
 
-(defn- ls-line [name [k link]]
+(defn- import-command [s args _]
+  (let [[dir & opts] args
+        {:strs [--classpath] :as opts} (apply hash-map opts)]
+    (when (or (nil? dir) (not= #{} (disj (set (keys opts)) "--classpath")))
+      (usage-error "import takes a directory and an optional --classpath CP"))
+    [(edn/link-ref (clj/import-project! s dir :classpath --classpath))]))
+
+(defn- ls-line [{:keys [name key link]}]
   (str (edn/link-ref link) "  " name
-       (case k :link "" :children "/" (str "  " k))))
+       (case key :link "" :children "/" (str "  " key))))
 
 (defn- ls-command [s [h path & more] _]
   (when (or (nil? h) (seq more))
     (usage-error "ls takes a hash and an optional path"))
-  (for [[name entry] (tree/ls s (edn/link h) (parse-path path))
-        link (sort-by key (dissoc entry :tags))]
-    (ls-line name link)))
+  (map ls-line (node/listing s (node/load s (edn/link h)) (parse-path path))))
 
 (defn- export-command [s args _]
   (when-not (= 2 (count args))
     (usage-error "export takes a hash and a directory"))
-  (tree/export! s (edn/link (first args)) (second args))
+  (node/export! s (node/load s (edn/link (first args))) (second args))
   nil)
 
 (def ^:private commands
   {"put" put-command
    "get" get-command
    "cat" cat-command
+   "import" import-command
    "ls" ls-command
    "export" export-command})
 

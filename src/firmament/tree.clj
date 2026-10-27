@@ -64,6 +64,12 @@
   [r link]
   (node/load-as r link :tree))
 
+(defn- step-node [t name]
+  (let [entry (get-in t [:entries name])]
+    (when-not (:children entry)
+      (fail (str "no subtree " (pr-str name)) {:name name}))
+    entry))
+
 (defn- step [r link name]
   (let [entry (get-in (get-tree r link) [:entries name])]
     (when-not entry
@@ -126,6 +132,25 @@
   [s root path]
   (update-entry! s root path (constantly nil)))
 
+(defn put-paths!
+  "Store a tree built from `entries`, a map of paths (vectors of names) to
+  entry maps, writing each tree once, bottom up. Trees along the paths are
+  created as needed, and an entry can have both its own links and
+  children. Returns the link to the root."
+  [s entries]
+  (->> (group-by (comp first key) entries)
+       (map (fn [[name items]]
+              (let [own (some (fn [[path entry]] (when (= 1 (count path)) entry)) items)
+                    below (into {} (keep (fn [[path entry]]
+                                           (when (< 1 (count path)) [(subvec path 1) entry])))
+                                items)]
+                [name (cond-> (or own {})
+                        (seq below) (assoc :children (put-paths! s below)))])))
+       (into {})
+       tree
+       (storage/put-value! s)
+       edn/link))
+
 ;; ------------------------------------------------------ directories in/out
 
 (def ^:private ^"[Ljava.nio.file.LinkOption;" no-follow
@@ -171,19 +196,28 @@
                    {} children)]
       (edn/link (storage/put-value! s (tree entries))))))
 
+(defn empty-dir!
+  "Create directory `dir`, which must not exist or be empty. Returns its
+  Path."
+  ^Path [dir]
+  (let [dir (->path dir)]
+    (when (and (Files/exists dir no-follow)
+               (or (not (Files/isDirectory dir no-follow))
+                   (with-open [ls (Files/list dir)] (.isPresent (.findAny ls)))))
+      (fail (str dir " exists and is not an empty directory") {:path (str dir)}))
+    (Files/createDirectories dir (make-array FileAttribute 0))))
+
 (defn export!
   "Write the tree at `link` out as directory `dir`, which must not exist or
   be empty. Entries with :children become directories and entries with only
   :link become files; anything else can't be written as a plain directory
   and is refused."
   [r link dir]
-  (let [dir (->path dir)]
-    (when (and (Files/exists dir no-follow)
-               (or (not (Files/isDirectory dir no-follow))
-                   (with-open [ls (Files/list dir)] (.isPresent (.findAny ls)))))
-      (fail (str dir " exists and is not an empty directory") {:path (str dir)}))
-    (Files/createDirectories dir (make-array FileAttribute 0))
-    (doseq [[name entry] (:entries (get-tree r link))]
+  (node/export! r (get-tree r link) dir))
+
+(defmethod node/export! :tree [r t dir]
+  (let [dir (empty-dir! dir)]
+    (doseq [[name entry] (:entries t)]
       (let [target (.resolve dir ^String name)
             link-keys (set (keys (dissoc entry :tags)))]
         (case link-keys
@@ -199,3 +233,11 @@
   [name entry] pairs."
   [r root path]
   (sort-by key (:entries (get-tree r (resolve-path r root path)))))
+
+(defmethod node/listing :tree [r t path]
+  (let [t (if (seq path)
+            (get-tree r (resolve-path r (:children (step-node t (first path))) (rest path)))
+            t)]
+    (for [[name entry] (sort-by key (:entries t))
+          [k link] (sort-by key (dissoc entry :tags))]
+      {:name name :key k :link link})))
