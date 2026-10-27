@@ -373,3 +373,17 @@
     (when-not (Arrays/equals (encode v) data)
       (fail :decode "input is not the canonical encoding of its value" {}))
     v))
+
+;; ------------------------------------------------------------------ links
+
+(defn links
+  "The set of links anywhere in `v`. Needs no schema: links are the only way
+  objects refer to each other, so this finds every reference."
+  [v]
+  (letfn [(walk [acc x]
+            (cond
+              (link? x) (conj! acc x)
+              (map? x) (reduce-kv (fn [acc k v] (walk (walk acc k) v)) acc x)
+              (vector? x) (reduce walk acc x)
+              :else acc))]
+    (persistent! (walk (transient #{}) v))))

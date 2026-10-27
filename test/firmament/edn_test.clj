@@ -123,3 +123,11 @@
                                              (gen/map gen-keyword inner {:max-elements 4})]))
                     (gen/one-of [gen/boolean gen/large-integer gen-keyword gen-link]))]
     (= v (edn/decode (edn/encode v)))))
+
+(deftest links
+  (let [a (edn/link (str "sha256:" (apply str (repeat 64 "a"))))
+        b (edn/link (str "sha256:" (apply str (repeat 64 "b"))))]
+    (is (= #{} (edn/links {:x [1 "s" :k true]})))
+    (is (= #{a b} (edn/links {:type :tree
+                              :entries {"x" {:link a :tags {:t/v [b a]}}}
+                              a "links as map keys count too"})))))

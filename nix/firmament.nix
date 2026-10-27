@@ -27,13 +27,36 @@ let
       touch $out
     '';
 
-in {
+  libSrc = source [ ../deps.edn ../deps-lock.json ../src ];
+
+in rec {
+  # The `firmament` command.
+  firmament = helpers.mkClojureBin {
+    name = "firmament";
+    primaryNamespace = "firmament.cli";
+    inherit version;
+    src = libSrc;
+  };
+
   # The library jar.
-  firmament = helpers.mkClojureLib {
+  firmament-lib = helpers.mkClojureLib {
     name = "firmament";
     inherit version;
-    src = source [ ../deps.edn ../deps-lock.json ../src ];
+    src = libSrc;
   };
+
+  # Put a file through the built command and read it back.
+  cli-smoke = pkgs.runCommand "firmament-cli-smoke"
+    { nativeBuildInputs = [ firmament ]; } ''
+      export FIRMAMENT_STORE=$PWD/store
+      head -c 1000000 /dev/urandom > big
+      printf 'hello\n' > small
+      firmament put small big > refs
+      expected="sha256:$({ printf 'blob\n'; cat small; } | sha256sum | cut -d' ' -f1)"
+      [ "$(head -n1 refs)" = "$expected" ]
+      firmament cat "$(sed -n 2p refs)" | cmp - big
+      touch $out
+    '';
 
   # clojure -M:test, including the golden vectors.
   clojure-tests = helpers.mkClojureTests {
