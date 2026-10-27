@@ -145,7 +145,7 @@ HASH is written sha256:<hex>.")
         (flush))))
   nil)
 
-(defn- run-command [s args ^OutputStream out]
+(defn- run-program-command [s args ^OutputStream out]
   (let [[from args] (if (= "--from" (first args))
                       [(or (second args) (usage-error "--from needs a store directory")) (drop 2 args)]
                       [nil args])
@@ -171,7 +171,7 @@ HASH is written sha256:<hex>.")
    "ls" ls-command
    "export" export-command
    "repl" repl-command
-   "run" run-command})
+   "run" run-program-command})
 
 (defn- run-command [s command args ^OutputStream out]
   (doseq [line ((commands command) s args out)]
