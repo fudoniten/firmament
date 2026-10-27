@@ -86,7 +86,7 @@ vectors agree, and the format version `firmament-0` is declared frozen.
 
 **Deliverables**
 
-- Tree construction and path-copying update (change one entry, rewrite only
+- [x] Tree construction and path-copying update (change one entry, rewrite only
   the path to the root).
 - Importer: read each source file's `ns` form, place its source under the
   namespace's entry as `:source/clj`, `:source/cljs` or `:source/cljc`; put

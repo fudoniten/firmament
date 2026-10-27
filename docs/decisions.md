@@ -81,3 +81,16 @@ input also changes the hash prefixes, so a hash identifies its version and
 two versions cannot disagree about what a hash means. The exact scheme waits
 for that version. Until then each store holds a single version and records
 which; data moves between versions only by re-import.
+
+## 2026-10-27 — Directory trees
+
+**Plain directories import without tags.** `put -r` maps files to
+`{:link …}` and directories to `{:children …}`, and records no modes,
+owners or times, so a directory's hash depends only on names and contents.
+If executable bits turn out to matter, they can be added later as an
+optional `:posix/mode` tag, which changes those hashes. See
+[spec/directories.md](spec/directories.md).
+
+**Symbolic links are refused** rather than followed or stored, until there
+is a use for them.
+
