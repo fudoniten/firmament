@@ -137,3 +137,22 @@ the path it's asked for.
 custom jar reader, and jars rarely change, so each one is written out once
 per store.
 
+## 2026-10-27 — Runner
+
+**Parameters replace the arguments.** With a parameters hash P, `-main` gets
+P's value as its only argument; without one, it gets command-line strings as
+usual. This keeps ordinary `-main` functions runnable, and a program written
+for Firmament takes a map.
+
+**Prefetch follows `:clj` requires only.** It loads what the JVM will
+load. Resources and jars are fetched whole, since nothing records which of
+them a program uses.
+
+**The cache checks before it stores.** An object copied from another store
+is hashed first, and a mismatch is refused, so a bad remote can't put
+anything into the local store.
+
+**`firmament` exits through `System/exit` only on failure.** On success it
+returns, like `clojure -M -m`, so a program that started threads, such as a
+server, keeps running.
+

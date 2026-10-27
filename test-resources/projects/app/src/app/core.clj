@@ -1,5 +1,5 @@
 (ns app.core
-  "Loaded from the store by the loader tests."
+  "Loaded and run from the store by the loader and runner tests."
   (:require [app.platform :as platform]
             [app.text-util :as tu]
             [clojure.edn :as edn]
@@ -13,3 +13,9 @@
 (defn hello [] (tu/shout (greeting/greet (:name (config)))))
 
 (defn platform [] platform/which)
+
+(defn -main
+  "Prints what it was given, after the greeting: command-line strings, or a
+  parameters value."
+  [& args]
+  (prn (into [(hello)] args)))

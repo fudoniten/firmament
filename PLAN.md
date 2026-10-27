@@ -142,11 +142,11 @@ jar and a resource lookup.
 
 **Deliverables**
 
-- Entry point taken from the manifest's `:clj/main` tag.
-- Closure prefetch driven by analysis `:requires` lists, so a cold start
-  fetches everything it needs without parsing source.
-- Per-node parameters P as their own (private) hash, passed to the entry point.
-- CLI: `firmament run <H> [<P>]`.
+- [x] Entry point taken from the manifest's `:clj/main` tag.
+- [x] Closure prefetch driven by analysis `:requires` lists, so a cold start
+      fetches everything it needs without parsing source.
+- [x] Per-node parameters P as their own (private) hash, passed to the entry point.
+- [x] CLI: `firmament run <H> [<P>]`.
 
 **Exit criteria**
 

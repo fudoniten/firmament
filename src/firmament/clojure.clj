@@ -31,6 +31,18 @@
   "Source entry keys to file extensions: :source/clj to \"clj\"."
   (into {} (map (fn [[ext {:keys [source]}]] [source ext])) source-types))
 
+(defn analysis-key
+  "The entry key for the analysis of the source under `source-key`:
+  :source/clj to :analysis/clj."
+  [source-key]
+  (get-in source-types [(source-key->ext source-key) :analysis]))
+
+(defn jvm-source
+  "The [key link] of the source the JVM loads from namespace entry `entry`,
+  or nil: :source/clj if there is one, else :source/cljc, as Clojure picks."
+  [entry]
+  (some #(when-let [link (get entry %)] [% link]) [:source/clj :source/cljc]))
+
 ;; ------------------------------------------------------- reading ns forms
 
 (defn- choose
@@ -214,7 +226,7 @@
       (fail (str "two " key " sources for namespace " ns) {:ns ns :path (str p)}))
     (-> acc
         (assoc-in [:namespaces path key] link)
-        (assoc-in [:analyses path (get-in source-types [(source-key->ext key) :analysis])]
+        (assoc-in [:analyses path (analysis-key key)]
                   (put-analysis! s analyzer-link src link)))))
 
 (defn- add-path-file
@@ -240,8 +252,9 @@
   namespace source (a .clj, .cljs or .cljc file starting with an ns form),
   filed under the namespace it declares with its analysis at the same path
   in a separate tree, or a resource. Jars come from
-  `:classpath` (`clojure -Spath` output) and :local/root jar deps."
-  [s dir & {:keys [classpath]}]
+  `:classpath` (`clojure -Spath` output) and :local/root jar deps. `:main`
+  names the namespace to run, recorded as the :clj/main tag."
+  [s dir & {:keys [classpath main]}]
   (let [dir (->path dir)
         deps (read-deps dir)
         paths (get deps :paths ["src"])
@@ -257,11 +270,14 @@
                       file (files-under root)]
                   file))
         jars (reduce (partial add-jar s) {} (jar-paths dir deps paths classpath))]
-    (edn/link (storage/put-value! s {:type :clj/manifest
-                                     :namespaces (tree/put-paths! s namespaces)
-                                     :analyses (tree/put-paths! s analyses)
-                                     :resources (tree/put-paths! s resources)
-                                     :jars (tree/put-paths! s jars)}))))
+    (when (and main (not (contains? namespaces (str/split (str main) #"\."))))
+      (fail (str "no namespace " main " to run") {:main (str main)}))
+    (edn/link (storage/put-value! s (cond-> {:type :clj/manifest
+                                             :namespaces (tree/put-paths! s namespaces)
+                                             :analyses (tree/put-paths! s analyses)
+                                             :resources (tree/put-paths! s resources)
+                                             :jars (tree/put-paths! s jars)}
+                                      main (assoc :tags {:clj/main (str main)}))))))
 
 ;; ------------------------------------------------------------- namespaces
 
@@ -292,7 +308,7 @@
   (let [sources (namespaces r (:namespaces m))
         analyses (into {} (namespaces r (:analyses m)))
         expected (fn [entry]
-                   (set (map #(get-in source-types [(source-key->ext %) :analysis]) (keys entry))))]
+                   (set (map analysis-key (keys entry))))]
     (when-let [extra (seq (remove (set (map first sources)) (keys analyses)))]
       (fail (str "analyses without sources: " (vec (sort extra))) {:namespaces extra}))
     (mapv (fn [[ns entry]]

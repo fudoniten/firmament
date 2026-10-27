@@ -1,11 +1,13 @@
 (ns firmament.cli
   "The `firmament` command: put files into the local store and read them back."
-  (:require [clojure.main]
+  (:require [clojure.edn]
+            [clojure.main]
             [clojure.string :as str]
             [firmament.clojure :as clj]
             [firmament.edn :as edn]
             [firmament.loader :as loader]
             [firmament.node :as node]
+            [firmament.runner :as runner]
             [firmament.storage :as storage]
             [firmament.store :as store]
             [firmament.tree :as tree])
@@ -23,14 +25,17 @@
 Commands:
   put FILE...   store each file; print the hash of each, one per line
   put -r DIR    store a directory as a tree; print the tree's hash
+  put --edn FILE
+                store the EDN value in FILE as a structured object, such as
+                parameters for run; print its hash
   get HASH      print the object: a blob's bytes, or a structured object's
                 canonical EDN
   cat HASH      print the contents of the file at HASH (a blob or a chunked
                 file)
-  import DIR [--classpath CP]
+  import DIR [--classpath CP] [--main NS]
                 import the deps.edn project in DIR; print its manifest's hash.
                 Jars come from CP (e.g. the output of clojure -Spath) and from
-                :local/root jar deps
+                :local/root jar deps. NS is the namespace run starts
   ls HASH [PATH]
                 list a tree, or the subtree at PATH (a/b/c) below it; or list
                 a manifest's namespaces, or the one named PATH. One line per
@@ -39,6 +44,12 @@ Commands:
   export HASH DIR
                 write a tree out as directory DIR, or a manifest out as a
                 project; DIR must not exist or be empty
+  run [--from STORE] HASH [PARAMS] [-- ARG...]
+                run the manifest at HASH: call -main of its main namespace with
+                the value at PARAMS, or else with the ARGs. With --from, objects
+                missing from the store are copied from STORE (checked against
+                their hashes), and everything the program needs is fetched
+                before it starts
   repl HASH     start a Clojure REPL that loads code from the manifest at
                 HASH: (require 'my.app) reads my.app from the store, and
                 io/resource and the manifest's jars work as on a classpath
@@ -75,12 +86,20 @@ HASH is written sha256:<hex>.")
 ;; command that returns lines has them printed; the others write to `out`
 ;; themselves.
 
+(defn- read-edn-file [f]
+  (clojure.edn/read-string {:readers edn/readers} (String. (read-path f) StandardCharsets/UTF_8)))
+
 (defn- put-command [s args _]
   (cond
     (= "-r" (first args))
     (do (when-not (= 2 (count args))
           (usage-error "put -r takes one directory"))
         [(edn/link-ref (tree/import-dir! s (second args)))])
+
+    (= "--edn" (first args))
+    (do (when-not (= 2 (count args))
+          (usage-error "put --edn takes one file"))
+        [(storage/put-value! s (read-edn-file (second args)))])
 
     (empty? args) (usage-error "put needs at least one file")
 
@@ -96,10 +115,11 @@ HASH is written sha256:<hex>.")
 
 (defn- import-command [s args _]
   (let [[dir & opts] args
-        {:strs [--classpath] :as opts} (apply hash-map opts)]
-    (when (or (nil? dir) (not= #{} (disj (set (keys opts)) "--classpath")))
-      (usage-error "import takes a directory and an optional --classpath CP"))
-    [(edn/link-ref (clj/import-project! s dir :classpath --classpath))]))
+        {:strs [--classpath --main] :as opts} (when (even? (count opts)) (apply hash-map opts))]
+    (when (or (nil? dir) (odd? (count (rest args)))
+              (seq (remove #{"--classpath" "--main"} (keys opts))))
+      (usage-error "import takes a directory, and optionally --classpath CP and --main NS"))
+    [(edn/link-ref (clj/import-project! s dir :classpath --classpath :main --main))]))
 
 (defn- ls-line [{:keys [name key link]}]
   (str (edn/link-ref link) "  " name
@@ -125,6 +145,24 @@ HASH is written sha256:<hex>.")
         (flush))))
   nil)
 
+(defn- run-command [s args ^OutputStream out]
+  (let [[from args] (if (= "--from" (first args))
+                      [(or (second args) (usage-error "--from needs a store directory")) (drop 2 args)]
+                      [nil args])
+        [positional [_ & program-args]] (split-with #(not= "--" %) args)
+        [h p & more] positional]
+    (when (or (nil? h) (seq more))
+      (usage-error "run takes a hash, an optional parameters hash, and -- before program arguments"))
+    (let [r (if from (storage/cache s (store/open from)) s)
+          out (OutputStreamWriter. out StandardCharsets/UTF_8)]
+      (binding [*out* out]
+        (runner/run-program! r (edn/link h)
+                             :params (some-> p edn/link)
+                             :args program-args
+                             :jar-dir (store/jar-dir s))
+        (flush))))
+  nil)
+
 (def ^:private commands
   {"put" put-command
    "get" get-command
@@ -132,7 +170,8 @@ HASH is written sha256:<hex>.")
    "import" import-command
    "ls" ls-command
    "export" export-command
-   "repl" repl-command})
+   "repl" repl-command
+   "run" run-command})
 
 (defn- run-command [s command args ^OutputStream out]
   (doseq [line ((commands command) s args out)]
@@ -171,5 +210,10 @@ HASH is written sha256:<hex>.")
           (complain err (str (.getName (class e)) ": " (ex-message e)) false)
           1)))))
 
-(defn -main [& args]
-  (System/exit (run args {:env (System/getenv) :out System/out :err System/err})))
+(defn -main
+  "Exits with the code `run` returns. On success it returns instead, so a
+  program started by run keeps going while it has threads running, as with
+  clojure -M -m."
+  [& args]
+  (let [code (run args {:env (System/getenv) :out System/out :err System/err})]
+    (when-not (zero? code) (System/exit code))))
