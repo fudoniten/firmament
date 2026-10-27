@@ -1,12 +1,12 @@
 (ns firmament.store
   "The local content store (docs/spec/store.md): objects on disk keyed by
-  hash, with local metadata kept beside them and never hashed."
+  hash, with local metadata kept beside them and never hashed. Reading and
+  writing objects goes through the protocols in firmament.storage."
   (:require [clojure.edn]
             [clojure.set :as set]
-            [firmament.chunk :as chunk]
             [firmament.edn :as edn]
             [firmament.hash :as hash]
-            [firmament.resolver :as resolver])
+            [firmament.storage :as storage])
   (:import (java.nio ByteBuffer)
            (java.nio.charset StandardCharsets)
            (java.nio.file AtomicMoveNotSupportedException CopyOption Files
@@ -82,10 +82,26 @@
           (fail (str "corrupt object: " ref) {:ref ref :path (str p)}))
         {:kind kind :bytes (Arrays/copyOfRange data (int (inc nl)) (alength data))}))))
 
+(defn- write-object!
+  "Write the object file for `payload`, unless the store already has it."
+  [^Path root kind ^bytes payload]
+  (let [ref (hash/object-hash kind payload)
+        target (object-path root ref)]
+    (when-not (exists? target)
+      (let [prefix (ascii (kinds kind))]
+        (write-atomically! root target
+                           (.array (doto (ByteBuffer/allocate (+ (alength prefix) (alength payload)))
+                                     (.put prefix)
+                                     (.put payload))))))
+    ref))
+
 (defrecord LocalStore [^Path root]
-  resolver/Resolver
+  storage/Resolver
   (fetch [_ ref] (read-object root ref))
-  (has? [_ ref] (exists? (object-path root ref))))
+  (has? [_ ref] (exists? (object-path root ref)))
+
+  storage/Store
+  (put-object! [_ kind payload] (write-object! root kind payload)))
 
 (defn default-dir
   "Where the store is when no directory is given: $FIRMAMENT_STORE, else
@@ -119,52 +135,6 @@
     (doseq [d ["objects" "meta" "tmp"]] (mkdirs (path root d)))
     (->LocalStore root)))
 
-(defn- put-raw!
-  "Store an object of `kind` whose hash `ref` the caller has computed from
-  `payload`."
-  [s kind ref ^bytes payload]
-  (let [target (object-path (:root s) ref)]
-    (when-not (exists? target)
-      (let [prefix (ascii (kinds kind))]
-        (write-atomically! (:root s) target
-                           (.array (doto (ByteBuffer/allocate (+ (alength prefix) (alength payload)))
-                                     (.put prefix)
-                                     (.put payload))))))
-    ref))
-
-(defn put-blob!
-  "Store `data` as a single blob. Returns its \"sha256:<hex>\" name."
-  [s ^bytes data]
-  (put-raw! s :blob (hash/blob-hash data) data))
-
-(defn put-value!
-  "Store the canonical encoding of `v` as a structured object. Returns its
-  name."
-  [s v]
-  (let [canonical (edn/encode v)]
-    (put-raw! s :edn (hash/edn-hash-bytes canonical) canonical)))
-
-(defn put-file!
-  "Store file contents, as a single blob or chunked (docs/spec/chunking.md).
-  Returns the link to the file: its blob or its root :chunked node.
-
-  The whole file is held in memory for now."
-  [s ^bytes data]
-  (let [{:keys [root blobs index]} (chunk/store-file data)]
-    (doseq [[ref b] blobs] (put-raw! s :blob ref b))
-    ;; Children before parents, so a store never holds a node whose children
-    ;; are missing, even after a crash part way through.
-    (doseq [[ref canonical] (sort-by (comp :level edn/decode val) (:objects index))]
-      (put-raw! s :edn ref canonical))
-    root))
-
-(defn get-object
-  "The object named `ref` as {:kind :blob|:edn, :bytes payload}, or nil."
-  [s ref]
-  (resolver/fetch s ref))
-
-(defn has? [s ref] (resolver/has? s ref))
-
 ;; --------------------------------------------------------------- metadata
 
 (defn object-meta
@@ -180,7 +150,7 @@
   object must be in the store. Returns the new map. Not safe against
   concurrent updates to the same object."
   [s ref f & args]
-  (when-not (has? s ref)
+  (when-not (storage/has? s ref)
     (fail (str "object not found: " ref) {:ref ref}))
   (let [m (apply f (object-meta s ref) args)]
     (when-not (map? m)

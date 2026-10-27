@@ -136,3 +136,20 @@
   (doseq [s ["a\uD800" "\uDC00b" "\uDC00\uD800"]]
     (is (= :encode (error-kind #(edn/encode s))) (pr-str s)))
   (is (edn/encode "😀") "a pair is fine"))
+
+(deftest links-and-bytes-are-values
+  (let [ref-a (str "sha256:" (apply str (repeat 64 "a")))
+        ref-b (str "sha256:" (apply str (repeat 64 "b")))
+        a (edn/link ref-a)
+        b (edn/link ref-b)]
+    (is (= (edn/link ref-a) a))
+    (is (= (hash (edn/link ref-a)) (hash a)))
+    (is (= #{a b} (set [a b (edn/link ref-b)])))
+    (is (= [a b] (sort [b a])))
+    (is (= "x" (get {a "x"} (edn/link ref-a)))))
+  (let [x (edn/->bytes (byte-array [1 2 3]))
+        y (edn/->bytes (byte-array [(unchecked-byte 0xff)]))]
+    (is (= 3 (count x)))
+    (is (= x (edn/->bytes (byte-array [1 2 3]))))
+    (is (= (hash x) (hash (edn/->bytes (byte-array [1 2 3])))))
+    (is (= [x y] (sort [y x])) "0xff sorts after 0x01, as unsigned bytes")))

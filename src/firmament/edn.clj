@@ -32,12 +32,21 @@
 
 (def ^:private link-re #"sha256:[0-9a-f]{64}")
 
+;; Links and byte strings are values: they compare with =, hash consistently
+;; for use as map keys and in sets, and sort.
+
 (deftype Link [^String ref]
   Object
   (equals [_ other]
     (and (instance? Link other) (= ref (.-ref ^Link other))))
   (hashCode [_] (.hashCode ref))
-  (toString [_] (str "#h \"" ref "\"")))
+  (toString [_] (str "#h \"" ref "\""))
+
+  clojure.lang.IHashEq
+  (hasheq [_] (hash ref))
+
+  Comparable
+  (compareTo [_ other] (compare ref (.-ref ^Link other))))
 
 (defmethod print-method Link [^Link l ^java.io.Writer w]
   (.write w (str l)))
@@ -66,7 +75,17 @@
   (equals [_ other]
     (and (instance? Bytes other) (Arrays/equals data ^bytes (.-data ^Bytes other))))
   (hashCode [_] (Arrays/hashCode data))
-  (toString [_] (str "#b64 \"" (.encodeToString (Base64/getEncoder) data) "\"")))
+  (toString [_] (str "#b64 \"" (.encodeToString (Base64/getEncoder) data) "\""))
+
+  clojure.lang.IHashEq
+  (hasheq [_] (Arrays/hashCode data))
+
+  clojure.lang.Counted
+  (count [_] (alength data))
+
+  Comparable
+  ;; Unsigned byte order, the same order canonical EDN sorts map keys in.
+  (compareTo [_ other] (Arrays/compareUnsigned data ^bytes (.-data ^Bytes other))))
 
 (defmethod print-method Bytes [^Bytes b ^java.io.Writer w]
   (.write w (str b)))

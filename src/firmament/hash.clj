@@ -31,6 +31,14 @@
   [v]
   (edn-hash-bytes (edn/encode v)))
 
+(defn object-hash
+  "The name of an object of `kind`, :blob or :edn, from its payload: a
+  blob's bytes or a structured object's canonical bytes."
+  [kind ^bytes payload]
+  (case kind
+    :blob (blob-hash payload)
+    :edn (edn-hash-bytes payload)))
+
 (defn blob-link [^bytes data] (edn/link (blob-hash data)))
 
 (defn edn-link [v] (edn/link (edn-hash v)))

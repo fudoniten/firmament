@@ -2,7 +2,8 @@
   "The `firmament` command: put files into the local store and read them back."
   (:require [clojure.string :as str]
             [firmament.edn :as edn]
-            [firmament.resolver :as resolver]
+            [firmament.node :as node]
+            [firmament.storage :as storage]
             [firmament.store :as store]
             [firmament.tree :as tree])
   (:import (java.io OutputStream PrintStream)
@@ -71,14 +72,14 @@ HASH is written sha256:<hex>.")
 
     (empty? args) (usage-error "put needs at least one file")
 
-    :else (mapv #(edn/link-ref (store/put-file! s (read-path %))) args)))
+    :else (mapv #(edn/link-ref (storage/put-file! s (read-path %))) args)))
 
 (defn- get-command [s args ^OutputStream out]
-  (.write out ^bytes (:bytes (resolver/fetch! s (edn/link-ref (hash-arg "get" args)))))
+  (.write out ^bytes (:bytes (storage/fetch! s (edn/link-ref (hash-arg "get" args)))))
   nil)
 
 (defn- cat-command [s args out]
-  (resolver/write-file! s (hash-arg "cat" args) out)
+  (node/write-file! s (hash-arg "cat" args) out)
   nil)
 
 (defn- ls-line [name [k link]]

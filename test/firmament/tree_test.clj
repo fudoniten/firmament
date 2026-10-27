@@ -3,7 +3,8 @@
             [firmament.edn :as edn]
             [firmament.gen :as gen]
             [firmament.hash :as hash]
-            [firmament.resolver :as resolver]
+            [firmament.node :as node]
+            [firmament.storage :as storage]
             [firmament.store :as store]
             [firmament.store-test :refer [temp-dir]]
             [firmament.tree :as tree])
@@ -48,7 +49,7 @@
       (is (thrown? clojure.lang.ExceptionInfo (tree/tree {"a" {:link l :tags {:plain 1}}}))
           "un-namespaced tag")
       (is (thrown? clojure.lang.ExceptionInfo (tree/tree {"a" {:link "sha256:00"}})) "not a link"))
-    (is (thrown? clojure.lang.ExceptionInfo (tree/check {:type :tree :entries {} :extra 1})))))
+    (is (thrown? clojure.lang.ExceptionInfo (node/validate {:type :tree :entries {} :extra 1})))))
 
 (deftest path-copying
   (let [s (store/open (temp-dir))
@@ -87,7 +88,7 @@
       (is (= tree/empty-tree (tree/get-tree s (tree/resolve-path s root ["empty"]))))
       (is (= (hash/blob-link (utf8 "(ns my.app.core)\n"))
              (:link (tree/lookup s root ["src" "my" "app" "core.clj"]))))
-      (is (= :chunked (:type (resolver/fetch-value
+      (is (= :chunked (:type (storage/fetch-value
                               s (edn/link-ref (:link (tree/lookup s root ["resources" "data.bin"]))))))))
     (testing "import, export and import again gives the same hash"
       (let [out (.resolve (temp-dir) "out")]
@@ -107,7 +108,7 @@
         (doseq [p [["resources"] ["empty"]]]
           (is (= (before p) (after p)) (pr-str p)))
         (is (= root' (tree/assoc-entry! s root ["src" "my" "app" "core.clj"]
-                                        {:link (store/put-file! s (utf8 "(ns my.app.core)\n(def x 1)\n"))}))
+                                        {:link (storage/put-file! s (utf8 "(ns my.app.core)\n(def x 1)\n"))}))
             "the same edit made with a path-copying update gives the same root")))))
 
 (deftest import-refusals
@@ -123,7 +124,7 @@
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not an empty directory"
                               (tree/export! s (tree/import-dir! s (sample-dir)) d)))))
     (testing "export of entries that aren't plain files or directories"
-      (let [l (store/put-file! s (utf8 "src"))
+      (let [l (storage/put-file! s (utf8 "src"))
             root (tree/assoc-entry! s nil ["my"] {:source/clj l})]
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"only :link or :children"
                               (tree/export! s root (.resolve (temp-dir) "out"))))))))
