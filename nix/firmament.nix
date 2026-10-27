@@ -66,6 +66,10 @@ in rec {
       firmament ls "$manifest" | grep -q 'sample.util  :source/cljc'
       firmament export "$manifest" project
       [ "$(firmament import project)" = "$manifest" ]
+      app=$(firmament import ${../test-resources/projects/app})
+      mkdir empty
+      (cd empty && printf "(require 'app.core)\n(app.core/hello)\n" | firmament repl "$app" > ../repl.out)
+      grep -q '"HELLO, STORE!"' repl.out
       touch $out
     '';
 

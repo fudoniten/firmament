@@ -131,6 +131,7 @@ src/firmament/
   store.clj          local content store
   tree.clj           trees: path-copying updates, directory import and export
   clojure.clj        Clojure layer: project import, analysis, projection
+  loader.clj         loading code from a manifest: classloader, with-root
   cli.clj            the `firmament` command
 test/                Clojure tests, including the golden vectors
 reference/           Python reference implementation and vector generator

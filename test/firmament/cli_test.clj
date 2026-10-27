@@ -5,18 +5,21 @@
             [firmament.gen :as gen]
             [firmament.hash :as hash]
             [firmament.store-test :refer [temp-dir]])
-  (:import (java.io ByteArrayOutputStream PrintStream)
+  (:import (java.io ByteArrayInputStream ByteArrayOutputStream PrintStream)
            (java.nio.file Files OpenOption Path)
            (java.util Arrays)))
 
 (set! *warn-on-reflection* true)
 
-(defn- run [store & args]
+(defn- run-with-input [^String input store & args]
   (let [out (ByteArrayOutputStream.)
         err (ByteArrayOutputStream.)
         code (cli/run (concat ["--store" (str store)] args)
-                      {:env {} :out out :err (PrintStream. err true "UTF-8")})]
+                      {:env {} :out out :err (PrintStream. err true "UTF-8")
+                       :in (ByteArrayInputStream. (.getBytes input "UTF-8"))})]
     {:code code :out (.toByteArray out) :err (.toString err "UTF-8")}))
+
+(defn- run [store & args] (apply run-with-input "" store args))
 
 (defn- write-file ^Path [^Path dir name ^bytes data]
   (Files/write (.resolve dir ^String name) data ^"[Ljava.nio.file.OpenOption;" (make-array OpenOption 0)))
@@ -86,3 +89,12 @@
       (is (= root (str/trim (String. ^bytes (:out (run store "import" (str target))) "UTF-8")))))
     (is (= 2 (:code (run store "import"))))
     (is (= 2 (:code (run store "import" "x" "--bogus" "y"))))))
+
+(deftest repl
+  (let [store (temp-dir)
+        root (str/trim (String. ^bytes (:out (run store "import" "test-resources/projects/app")) "UTF-8"))
+        {:keys [code out err]} (run-with-input "(require 'app.core :reload-all)\n(app.core/hello)\n"
+                                               store "repl" root)]
+    (is (= 0 code) err)
+    (is (str/includes? (String. ^bytes out "UTF-8") "\"HELLO, STORE!\""))
+    (is (= 2 (:code (run store "repl"))))))

@@ -27,7 +27,8 @@
    "cljs" {:platforms [:cljs] :source :source/cljs :analysis :analysis/cljs}
    "cljc" {:platforms [:clj :cljs] :source :source/cljc :analysis :analysis/cljc}})
 
-(def ^:private source-key->ext
+(def source-key->ext
+  "Source entry keys to file extensions: :source/clj to \"clj\"."
   (into {} (map (fn [[ext {:keys [source]}]] [source ext])) source-types))
 
 ;; ------------------------------------------------------- reading ns forms

@@ -1,13 +1,16 @@
 (ns firmament.cli
   "The `firmament` command: put files into the local store and read them back."
-  (:require [clojure.string :as str]
+  (:require [clojure.main]
+            [clojure.string :as str]
             [firmament.clojure :as clj]
             [firmament.edn :as edn]
+            [firmament.loader :as loader]
             [firmament.node :as node]
             [firmament.storage :as storage]
             [firmament.store :as store]
             [firmament.tree :as tree])
-  (:import (java.io OutputStream PrintStream)
+  (:import (clojure.lang LineNumberingPushbackReader)
+           (java.io InputStream InputStreamReader OutputStream OutputStreamWriter PrintStream)
            (java.nio.charset StandardCharsets)
            (java.nio.file Files Paths))
   (:gen-class))
@@ -36,6 +39,9 @@ Commands:
   export HASH DIR
                 write a tree out as directory DIR, or a manifest out as a
                 project; DIR must not exist or be empty
+  repl HASH     start a Clojure REPL that loads code from the manifest at
+                HASH: (require 'my.app) reads my.app from the store, and
+                io/resource and the manifest's jars work as on a classpath
 
 The store is DIR if given, else $FIRMAMENT_STORE, else ~/.firmament/store.
 HASH is written sha256:<hex>.")
@@ -110,13 +116,23 @@ HASH is written sha256:<hex>.")
   (node/export! s (node/load s (edn/link (first args))) (second args))
   nil)
 
+(defn- repl-command [s args ^OutputStream out]
+  (let [root (hash-arg "repl" args)
+        out (OutputStreamWriter. out StandardCharsets/UTF_8)]
+    (loader/with-root [s root :jar-dir (store/jar-dir s)]
+      (binding [*out* out]
+        (clojure.main/repl)
+        (flush))))
+  nil)
+
 (def ^:private commands
   {"put" put-command
    "get" get-command
    "cat" cat-command
    "import" import-command
    "ls" ls-command
-   "export" export-command})
+   "export" export-command
+   "repl" repl-command})
 
 (defn- run-command [s command args ^OutputStream out]
   (doseq [line ((commands command) s args out)]
@@ -131,9 +147,10 @@ HASH is written sha256:<hex>.")
 
 (defn run
   "Run the command line `args`, writing output to `out` and messages to
-  `err` (a PrintStream). Returns the exit code: 0 on success, 1 on failure,
-  2 on a usage error."
-  [args {:keys [env ^OutputStream out ^PrintStream err]}]
+  `err` (a PrintStream), and reading `in` (an InputStream, for repl) if
+  given. Returns the exit code: 0 on success, 1 on failure, 2 on a usage
+  error."
+  [args {:keys [env ^OutputStream out ^PrintStream err ^InputStream in]}]
   (let [{:keys [store command args error help]} (parse-args args env)]
     (cond
       help (do (.println err ^String usage) 0)
@@ -142,7 +159,10 @@ HASH is written sha256:<hex>.")
       (do (complain err (str "unknown command: " command) true) 2)
       :else
       (try
-        (run-command (store/open store) command args out)
+        (binding [*in* (if in
+                         (LineNumberingPushbackReader. (InputStreamReader. in StandardCharsets/UTF_8))
+                         *in*)]
+          (run-command (store/open store) command args out))
         0
         (catch clojure.lang.ExceptionInfo e
           (complain err (ex-message e) false)
