@@ -146,7 +146,7 @@
   [r ns]
   (when-not *ns-root* (fail "load-ns! needs a root; call it inside with-root" {:ns ns}))
   (let [entry (get (into {} (clj/namespaces r (:namespaces (clj/manifest r *ns-root*)))) (str ns))
-        [k link] (some #(when-let [link (get entry %)] [% link]) [:source/clj :source/cljc])]
+        [k link] (clj/jvm-source entry)]
     (when-not link
       (fail (str "no JVM source for namespace " ns " in " (edn/link-ref *ns-root*)) {:ns ns}))
     (let [path (clj/source-path (str ns) (clj/source-key->ext k))]

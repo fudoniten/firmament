@@ -98,3 +98,22 @@
     (is (= 0 code) err)
     (is (str/includes? (String. ^bytes out "UTF-8") "\"HELLO, STORE!\""))
     (is (= 2 (:code (run store "repl"))))))
+
+(deftest running
+  (let [remote (temp-dir)
+        local (temp-dir)
+        root (str/trim (String. ^bytes (:out (run remote "import" "test-resources/projects/app" "--main" "app.core")) "UTF-8"))
+        p-file (.resolve (temp-dir) "p.edn")
+        _ (spit (str p-file) "{:who \"params\"}")
+        p (str/trim (String. ^bytes (:out (run remote "put" "--edn" (str p-file))) "UTF-8"))]
+    (let [{:keys [code out err]} (run local "run" "--from" (str remote) root "--" "x")]
+      (is (= 0 code) err)
+      (is (= "[\"HELLO, STORE!\" \"x\"]\n" (String. ^bytes out "UTF-8"))))
+    (testing "the first run copied what the program needs into the local store"
+      (is (= 0 (:code (run local "run" root)))))
+    (let [{:keys [code out err]} (run local "run" "--from" (str remote) root p)]
+      (is (= 0 code) err)
+      (is (= "[\"HELLO, STORE!\" {:who \"params\"}]\n" (String. ^bytes out "UTF-8"))))
+    (is (= 2 (:code (run local "run"))))
+    (is (= 2 (:code (run local "run" root p "extra"))))))
+

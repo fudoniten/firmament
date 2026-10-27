@@ -46,7 +46,8 @@ A loadable program is a manifest object:
 ```
 
 `:namespaces`, `:analyses`, `:resources` and `:jars` are always present; an empty one is
-the empty tree. `:tags` is optional (the importer doesn't set any yet).
+the empty tree. `:tags` is optional. `:clj/main` names the namespace
+`firmament run` starts, and `import --main NS` sets it.
 Resources are a plain directory tree (`{:link …}` and `{:children …}`
 entries) laid out by their path below a source root. Jars are entries named
 by their file name, such as `"clojure-1.12.5.jar"`.
@@ -81,6 +82,8 @@ colliding with the resources subtree.
   Classpath directories must be the project's own `:paths`; other
   directories (git or local-root projects) aren't supported yet. The importer
   never resolves dependencies itself.
+- **`--main NS`** records the namespace to run as the `:clj/main` tag. It
+  must be one of the project's namespaces.
 
 Importing the same project always gives the same manifest hash.
 
@@ -143,6 +146,30 @@ is.
 `firmament repl H` starts a Clojure REPL inside `with-root`. With nothing but
 the store and H, `(require 'my.app)` loads the program, its jars and its
 resources.
+
+## Running
+
+`firmament run H [P] [-- ARG...]` runs the manifest H (`firmament.runner`):
+
+1. **Prefetch.** The closure of the `:clj/main` namespace is read from the
+   analyses: the namespace, and transitively every namespace in its `:clj`
+   requires that the manifest has. The namespaces the manifest doesn't have
+   come from the host (Clojure) or a jar. Then the closure's JVM sources,
+   every resource and every jar are fetched. No source is parsed to find
+   them.
+2. **Load** the main namespace inside `with-root`, as in
+   [Loading](#loading).
+3. **Call its `-main`.** With P, the hash of a structured object (such as a
+   per-machine configuration map), `-main` gets P's value as its only
+   argument. Without P, it gets the ARGs as strings, as with `clojure -M -m`.
+   `firmament put --edn FILE` stores a parameters value.
+
+With `--from STORE`, the local store is a cache in front of STORE. Each
+object missing locally is copied in once it has been checked against its
+hash, so prefetching copies the program into the local store, and a later
+run of a changed program copies only the objects that changed: the
+manifest, the trees on the changed paths, and the changed sources and their
+analyses. STORE is a local directory for now; serving over HTTP is Phase 5.
 
 ## Analysis meta-object
 

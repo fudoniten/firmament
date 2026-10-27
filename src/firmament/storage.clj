@@ -87,3 +87,41 @@
   "An empty store that keeps objects in memory, for tests and scratch work."
   []
   (->MemoryStore (atom {})))
+
+;; ----------------------------------------------------------------- caching
+
+(defrecord Cache [local remote]
+  Resolver
+  (fetch [_ ref]
+    (or (fetch local ref)
+        (when-let [{:keys [kind bytes] :as object} (fetch remote ref)]
+          (let [got (hash/object-hash kind bytes)]
+            (when-not (= ref got)
+              (fail (str "asked for " ref " but got " got) {:ref ref :got got})))
+          (put-object! local kind bytes)
+          object)))
+  (has? [_ ref] (or (has? local ref) (has? remote ref)))
+
+  Store
+  (put-object! [_ kind payload] (put-object! local kind payload)))
+
+(defn cache
+  "A store that reads from `local`, then `remote`, copying what it gets from
+  `remote` into `local`. Copies are checked against their hash, so a
+  remote can't substitute one object for another. Writes go to `local`."
+  [local remote]
+  (->Cache local remote))
+
+(defn fetch-all!
+  "Fetch the object named `ref` and everything it links to, recursively,
+  each object once. Through a `cache`, this copies the whole graph into the
+  local store. Returns the set of names fetched."
+  [r ref]
+  (loop [todo (list ref) seen #{}]
+    (if-let [ref (first todo)]
+      (if (seen ref)
+        (recur (rest todo) seen)
+        (let [{:keys [kind bytes]} (fetch! r ref)
+              children (when (= :edn kind) (map edn/link-ref (edn/links (edn/decode bytes))))]
+          (recur (into (rest todo) children) (conj seen ref))))
+      seen)))
