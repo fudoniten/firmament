@@ -156,3 +156,22 @@ anything into the local store.
 returns, like `clojure -M -m`, so a program that started threads, such as a
 server, keeps running.
 
+## 2026-10-27 — Serving
+
+**The URL layout is the store's directory layout** (`objects/ab/cdef…`,
+`format`), not `GET /<hash>`. Then a static file server, or a bucket
+synced from a store, is a remote with no Firmament code on it, and the
+built-in server is a small file server plus authenticated PUT.
+
+**Servers don't check what they serve; clients check what they get.** The
+client hashes every object, so the server's integrity doesn't matter, and
+a corrupted or tampered file is caught where it would do harm.
+
+**Writes need a bearer token, and only writes.** Reading content-addressed
+objects needs no secret, because you have to know a hash to ask for it.
+Private content should be served only from your own host (see Deferred in
+PLAN.md).
+
+**No dependencies.** The client is `java.net.http` and the server is the
+JDK's `com.sun.net.httpserver`.
+

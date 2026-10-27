@@ -116,6 +116,7 @@ docs/
     objects.md       hashing, trust model, core node types
     chunking.md      chunker and chunk index
     store.md         local store layout (local state, not hashed)
+    http.md          stores over HTTP: URL layout, reads, authorized writes
     directories.md   directory import and export
     clojure.md       Clojure layer (draft)
 deps.edn             Clojure project
@@ -133,6 +134,7 @@ src/firmament/
   clojure.clj        Clojure layer: project import, analysis, projection
   loader.clj         loading code from a manifest: classloader, with-root
   runner.clj         running a manifest: closure prefetch, -main with params
+  http.clj           stores over HTTP: client, server, push
   cli.clj            the `firmament` command
 test/                Clojure tests, including the golden vectors
 reference/           Python reference implementation and vector generator

@@ -125,3 +125,23 @@
               children (when (= :edn kind) (map edn/link-ref (edn/links (edn/decode bytes))))]
           (recur (into (rest todo) children) (conj seen ref))))
       seen)))
+
+(defn copy!
+  "Copy object `ref` and everything it links to from `from` into `to`,
+  children before parents, so `to` never holds an object whose links are
+  missing. Objects `to` already has aren't sent again, but their links are
+  still checked. Returns the number of objects copied."
+  [from to ref]
+  (let [seen (volatile! #{})
+        copied (volatile! 0)]
+    (letfn [(visit [ref]
+              (when-not (@seen ref)
+                (vswap! seen conj ref)
+                (let [{:keys [kind bytes]} (fetch! from ref)]
+                  (when (= :edn kind)
+                    (run! visit (map edn/link-ref (edn/links (edn/decode bytes)))))
+                  (when-not (has? to ref)
+                    (put-object! to kind bytes)
+                    (vswap! copied inc)))))]
+      (visit ref)
+      @copied)))

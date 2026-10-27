@@ -72,6 +72,13 @@ in rec {
       grep -q '"HELLO, STORE!"' repl.out
       (cd empty && FIRMAMENT_STORE=$PWD/../fresh firmament run --from ../store "$app" -- x > ../run.out)
       grep -qF '["HELLO, STORE!" "x"]' run.out
+      firmament serve --port 0 > serve.out &
+      server=$!
+      for i in $(seq 600); do [ -s serve.out ] && break; sleep 0.1; done
+      url=$(head -n1 serve.out)
+      (cd empty && FIRMAMENT_STORE=$PWD/../over-http firmament run --from "$url" "$app" -- y > ../http.out)
+      kill $server
+      grep -qF '["HELLO, STORE!" "y"]' http.out
       touch $out
     '';
 

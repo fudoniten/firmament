@@ -1,10 +1,12 @@
 (ns firmament.cli
-  "The `firmament` command: put files into the local store and read them back."
+  "The `firmament` command: store files, trees and projects, and load, run
+  and serve them."
   (:require [clojure.edn]
             [clojure.main]
             [clojure.string :as str]
             [firmament.clojure :as clj]
             [firmament.edn :as edn]
+            [firmament.http :as http]
             [firmament.loader :as loader]
             [firmament.node :as node]
             [firmament.runner :as runner]
@@ -47,15 +49,33 @@ Commands:
   run [--from STORE] HASH [PARAMS] [-- ARG...]
                 run the manifest at HASH: call -main of its main namespace with
                 the value at PARAMS, or else with the ARGs. With --from, objects
-                missing from the store are copied from STORE (checked against
-                their hashes), and everything the program needs is fetched
-                before it starts
+                missing from the store are copied from STORE (a directory or an
+                http(s):// URL; each copy is checked against its hash), and
+                everything the program needs is fetched before it starts
+  serve [--port N] [--bind ADDR]
+                serve the store over HTTP (default 127.0.0.1:8080; port 0 picks
+                a free port) and print its URL. Read-only unless
+                $FIRMAMENT_TOKEN is set, in which case PUTs bearing that token
+                can add objects
+  push STORE HASH
+                copy HASH and everything it links to into STORE (a directory, or
+                a URL with $FIRMAMENT_TOKEN as the token); print how many
+                objects were sent
   repl HASH     start a Clojure REPL that loads code from the manifest at
                 HASH: (require 'my.app) reads my.app from the store, and
                 io/resource and the manifest's jars work as on a classpath
 
 The store is DIR if given, else $FIRMAMENT_STORE, else ~/.firmament/store.
 HASH is written sha256:<hex>.")
+
+(def ^:private ^:dynamic *env* {})
+
+(defn- other-store
+  "The store named on the command line: a URL, or a directory."
+  [spec]
+  (if (http/url? spec)
+    (http/http-store spec :token (not-empty (get *env* "FIRMAMENT_TOKEN")))
+    (store/open spec)))
 
 (defn- parse-args [args env]
   (loop [args args opts {:store (store/default-dir env)}]
@@ -147,13 +167,13 @@ HASH is written sha256:<hex>.")
 
 (defn- run-program-command [s args ^OutputStream out]
   (let [[from args] (if (= "--from" (first args))
-                      [(or (second args) (usage-error "--from needs a store directory")) (drop 2 args)]
+                      [(or (second args) (usage-error "--from needs a store directory or URL")) (drop 2 args)]
                       [nil args])
         [positional [_ & program-args]] (split-with #(not= "--" %) args)
         [h p & more] positional]
     (when (or (nil? h) (seq more))
       (usage-error "run takes a hash, an optional parameters hash, and -- before program arguments"))
-    (let [r (if from (storage/cache s (store/open from)) s)
+    (let [r (if from (storage/cache s (other-store from)) s)
           out (OutputStreamWriter. out StandardCharsets/UTF_8)]
       (binding [*out* out]
         (runner/run-program! r (edn/link h)
@@ -163,6 +183,23 @@ HASH is written sha256:<hex>.")
         (flush))))
   nil)
 
+(defn- serve-command [s args _]
+  (let [{:strs [--port --bind] :as opts} (when (even? (count args)) (apply hash-map args))]
+    (when (or (odd? (count args)) (seq (remove #{"--port" "--bind"} (keys opts))))
+      (usage-error "serve takes an optional --port N and --bind ADDR"))
+    (let [port (if --port
+                 (or (parse-long --port) (usage-error (str "not a port: " --port)))
+                 8080)
+          server (http/serve! s :port port :bind (or --bind "127.0.0.1")
+                              :token (not-empty (get *env* "FIRMAMENT_TOKEN")))]
+      [(http/server-url server)])))
+
+(defn- push-command [s args _]
+  (when-not (= 2 (count args))
+    (usage-error "push takes a store and a hash"))
+  (let [[spec h] args]
+    [(storage/copy! s (other-store spec) (edn/link-ref (edn/link h)))]))
+
 (def ^:private commands
   {"put" put-command
    "get" get-command
@@ -171,7 +208,9 @@ HASH is written sha256:<hex>.")
    "ls" ls-command
    "export" export-command
    "repl" repl-command
-   "run" run-program-command})
+   "run" run-program-command
+   "serve" serve-command
+   "push" push-command})
 
 (defn- run-command [s command args ^OutputStream out]
   (doseq [line ((commands command) s args out)]
@@ -200,7 +239,8 @@ HASH is written sha256:<hex>.")
       (try
         (binding [*in* (if in
                          (LineNumberingPushbackReader. (InputStreamReader. in StandardCharsets/UTF_8))
-                         *in*)]
+                         *in*)
+                  *env* (or env {})]
           (run-command (store/open store) command args out))
         0
         (catch clojure.lang.ExceptionInfo e
