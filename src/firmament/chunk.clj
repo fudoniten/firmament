@@ -83,14 +83,15 @@
 (defn group-entries
   "Split one level's entries into the lists that become its nodes."
   [entries]
-  (let [last-i (dec (count entries))]
-    (loop [i 0 entries (seq entries) group [] groups []]
-      (if-let [[e & more] entries]
-        (let [group (conj group e)]
-          (if (or (boundary? (first e)) (= index-cap (count group)) (= i last-i))
-            (recur (inc i) more [] (conj groups group))
-            (recur (inc i) more group groups)))
-        groups))))
+  (let [{:keys [groups group]}
+        (reduce (fn [{:keys [group] :as acc} [link :as entry]]
+                  (let [group (conj group entry)]
+                    (if (or (boundary? link) (= index-cap (count group)))
+                      (-> acc (update :groups conj group) (assoc :group []))
+                      (assoc acc :group group))))
+                {:groups [] :group []}
+                entries)]
+    (cond-> groups (seq group) (conj group))))
 
 (defn build-index
   "Build the chunk index over level-0 entries, [link size] pairs. Returns

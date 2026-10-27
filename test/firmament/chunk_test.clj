@@ -9,7 +9,7 @@
 
 ;; ---------------------------------------------------------- golden vectors
 
-(defn- format-hex [^long x] (String/format "%016x" (object-array [x])))
+(defn- format-hex [x] (format "%016x" x))
 
 (deftest gear-vectors
   (let [{:keys [format gear]} (load-vectors "gear.edn")]

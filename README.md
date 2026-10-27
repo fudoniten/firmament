@@ -126,7 +126,8 @@ src/firmament/
   edn.clj            canonical EDN encoder and strict decoder
   hash.clj           blob and structured-object hashes
   chunk.clj          chunker and chunk index
-  resolver.clj       fetching objects and files by hash
+  storage.clj        Resolver and Store protocols, put/fetch operations, memory store
+  node.clj           node types: validation and file contents, as multimethods
   store.clj          local content store
   tree.clj           trees: path-copying updates, directory import and export
   cli.clj            the `firmament` command
