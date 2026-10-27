@@ -48,12 +48,15 @@
   (let [s (storage/memory-store)
         root (import! s)
         m (clj/manifest s root)
-        nss (into {} (clj/namespaces s (:namespaces m)))]
+        nss (into {} (clj/namespace-entries s m))]
     (testing "namespaces come from ns forms, not paths"
       (is (= ["sample.core" "sample.my-app" "sample.renamed" "sample.ui" "sample.util"]
              (sort (keys nss))))
       (is (= #{:source/clj :analysis/clj} (set (keys (nss "sample.core")))))
       (is (= #{:source/cljc :analysis/cljc} (set (keys (nss "sample.util"))))))
+    (testing "sources and analyses are separate trees with the same layout"
+      (is (= #{:source/clj} (set (keys (get (into {} (clj/namespaces s (:namespaces m))) "sample.core")))))
+      (is (= #{:analysis/clj} (set (keys (get (into {} (clj/namespaces s (:analyses m))) "sample.core"))))))
     (testing "sources are the raw file bytes"
       (is (= (slurp (str sample "/src/elsewhere/misplaced.clj"))
              (String. (node/read-file s (:source/clj (nss "sample.renamed"))) StandardCharsets/UTF_8))))
@@ -106,15 +109,35 @@
     (is (every? true? (map not= (trees before) (trees after))) "the path to the root changes")
     (is (= (:resources before) (:resources after)))
     (is (= (:jars before) (:jars after)))
-    (is (= (dissoc (into {} (clj/namespaces s (:namespaces before))) "sample.ui")
-           (dissoc (into {} (clj/namespaces s (:namespaces after))) "sample.ui"))
-        "every other namespace keeps its links")))
+    (is (= (dissoc (into {} (clj/namespace-entries s before)) "sample.ui")
+           (dissoc (into {} (clj/namespace-entries s after)) "sample.ui"))
+        "every other namespace keeps its links")
+    (is (not= (:analysis/cljs (get (into {} (clj/namespace-entries s before)) "sample.ui"))
+              (:analysis/cljs (get (into {} (clj/namespace-entries s after)) "sample.ui")))
+        "the edited source gets a new analysis")))
+
+(deftest code-hash-ignores-the-analyzer
+  (let [s (storage/memory-store)
+        v1 (clj/manifest s (import! s))
+        v2 (with-redefs [clj/analyzer (assoc clj/analyzer :version 2)]
+             (clj/manifest s (import! s)))]
+    (is (= (:namespaces v1) (:namespaces v2)) "the code's hash doesn't change")
+    (is (not= (:analyses v1) (:analyses v2)) "the analyses do")))
+
+(deftest sources-and-analyses-must-match
+  (let [s (storage/memory-store)
+        m (clj/manifest s (import! s))
+        empty-link (edn/link (storage/put-value! s tree/empty-tree))]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"has sources"
+                          (clj/namespace-entries s (assoc m :analyses empty-link))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"analyses without sources"
+                          (clj/namespace-entries s (assoc m :namespaces empty-link))))))
 
 (deftest firmament-itself
   (testing "a second real project: this repository"
     (let [s (storage/memory-store)
           m (clj/manifest s (clj/import-project! s "."))
-          nss (into {} (clj/namespaces s (:namespaces m)))]
+          nss (into {} (clj/namespace-entries s m))]
       (is (contains? nss "firmament.clojure"))
       (is (= ["clojure.edn" "clojure.string" "firmament.edn" "firmament.node"
               "firmament.storage" "firmament.tree"]

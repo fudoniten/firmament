@@ -96,10 +96,14 @@ is a use for them.
 
 ## 2026-10-27 — Clojure import
 
-**Analysis lives in the namespace entry**, as `:analysis/clj` (etc.) beside
-`:source/clj`, so one walk of the namespace tree finds sources and their
-requires. The namespace tree's hash therefore also depends on the analyzer
-version.
+**Analysis lives in a sibling tree** (`:analyses` in the manifest, the same
+layout as `:namespaces`), not in the namespace entry, and not in a local
+index. Keeping it out of the namespace tree makes that tree's hash mean
+"this code", whatever analyzer ran: the hash a live REPL state would be
+shared by shouldn't move when the analyzer does. Keeping it in the manifest
+means consumers never analyze; a local index would only push the work
+downstream. Cost: a save rewrites two paths, and loaders check that the two
+trees match.
 
 **`:requires` is per platform.** A `.cljc` file is read once for `:clj` and
 once for `:cljs`, and their requires differ, so `:requires` is a map from

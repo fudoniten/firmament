@@ -106,11 +106,13 @@
   the analysis it gives for the same source changes."
   {:type :clj/analyzer :name "firmament.clojure" :version 1})
 
+(def ^:private manifest-trees [:namespaces :analyses :resources :jars])
+
 (defmethod node/validate :clj/manifest [m]
-  (when-not (and (every? #(edn/link? (get m %)) [:namespaces :resources :jars])
-                 (every? #{:type :namespaces :resources :jars :tags} (keys m))
+  (when-not (and (every? #(edn/link? (get m %)) manifest-trees)
+                 (every? (conj (set manifest-trees) :type :tags) (keys m))
                  (or (not (contains? m :tags)) (and (map? (:tags m)) (seq (:tags m)))))
-    (fail "invalid :clj/manifest: needs :namespaces, :resources and :jars links, and optional :tags"
+    (fail "invalid :clj/manifest: needs :namespaces, :analyses, :resources and :jars links, and optional :tags"
           {:node m}))
   m)
 
@@ -203,17 +205,15 @@
     (distinct (remove nil? (concat from-cp local)))))
 
 (defn- add-source
-  "Add a source to `namespaces`, a map of namespace paths to entries, with
-  its analysis beside it."
-  [namespaces s analyzer-link {:keys [ns key] :as src} link ^Path p]
-  (let [path (str/split ns #"\.")
-        entry (get namespaces path {})]
-    (when (contains? entry key)
+  "Add a source to the :namespaces of `acc`, and its analysis at the same
+  path in the :analyses; both are maps of namespace paths to entries."
+  [acc s analyzer-link {:keys [ns key] :as src} link ^Path p]
+  (let [path (str/split ns #"\.")]
+    (when (contains? (get-in acc [:namespaces path]) key)
       (fail (str "two " key " sources for namespace " ns) {:ns ns :path (str p)}))
-    (assoc namespaces path
-           (assoc entry
-                  key link
-                  (get-in source-types [(source-key->ext key) :analysis])
+    (-> acc
+        (assoc-in [:namespaces path key] link)
+        (assoc-in [:analyses path (get-in source-types [(source-key->ext key) :analysis])]
                   (put-analysis! s analyzer-link src link)))))
 
 (defn- add-path-file
@@ -223,7 +223,7 @@
   (let [data (Files/readAllBytes p)
         link (storage/put-file! s data)]
     (if-let [src (source-file p data)]
-      (update acc :namespaces add-source s analyzer-link src link p)
+      (add-source acc s analyzer-link src link p)
       (update acc :resources add-unique names {:link link} "resources at"))))
 
 (defn- add-jar [s jars ^Path p]
@@ -237,7 +237,8 @@
   "Import the deps.edn project in `dir` into store `s` and return the link
   to its :clj/manifest. Every file under the project's :paths is either a
   namespace source (a .clj, .cljs or .cljc file starting with an ns form),
-  filed under the namespace it declares, or a resource. Jars come from
+  filed under the namespace it declares with its analysis at the same path
+  in a separate tree, or a resource. Jars come from
   `:classpath` (`clojure -Spath` output) and :local/root jar deps."
   [s dir & {:keys [classpath]}]
   (let [dir (->path dir)
@@ -246,9 +247,9 @@
         _ (when-not (every? string? paths)
             (fail "only string :paths are supported" {:paths paths}))
         analyzer-link (edn/link (storage/put-value! s analyzer))
-        {:keys [namespaces resources]}
+        {:keys [namespaces analyses resources]}
         (reduce (partial add-path-file s analyzer-link)
-                {:namespaces {} :resources {}}
+                {:namespaces {} :analyses {} :resources {}}
                 (for [path paths
                       :let [root (.resolve dir ^String path)]
                       :when (Files/isDirectory root follow)
@@ -257,14 +258,16 @@
         jars (reduce (partial add-jar s) {} (jar-paths dir deps paths classpath))]
     (edn/link (storage/put-value! s {:type :clj/manifest
                                      :namespaces (tree/put-paths! s namespaces)
+                                     :analyses (tree/put-paths! s analyses)
                                      :resources (tree/put-paths! s resources)
                                      :jars (tree/put-paths! s jars)}))))
 
 ;; ------------------------------------------------------------- namespaces
 
 (defn namespaces
-  "Every namespace in the namespace tree at `link`, sorted, as [name entry]
-  pairs; an entry holds the namespace's :source/* and :analysis/* links."
+  "Every namespace in the namespace-shaped tree at `link` (a manifest's
+  :namespaces or :analyses), sorted, as [name entry] pairs; an entry holds
+  the namespace's :source/* or :analysis/* links."
   [r link]
   (letfn [(walk [prefix link]
             (mapcat (fn [[segment entry]]
@@ -280,15 +283,36 @@
   [r link]
   (node/load-as r link :clj/manifest))
 
+(defn namespace-entries
+  "Every namespace in manifest `m`, sorted, as [name entry] pairs; an entry
+  holds both the namespace's :source/* links and their :analysis/* links.
+  Throws unless every source has an analysis and every analysis a source."
+  [r m]
+  (let [sources (namespaces r (:namespaces m))
+        analyses (into {} (namespaces r (:analyses m)))
+        expected (fn [entry]
+                   (set (map #(get-in source-types [(source-key->ext %) :analysis]) (keys entry))))]
+    (when-let [extra (seq (remove (set (map first sources)) (keys analyses)))]
+      (fail (str "analyses without sources: " (vec (sort extra))) {:namespaces extra}))
+    (mapv (fn [[ns entry]]
+            (let [analysis (get analyses ns {})]
+              (when-not (= (expected entry) (set (keys analysis)))
+                (fail (str "namespace " ns " has sources " (vec (sort (keys entry)))
+                           " but analyses " (vec (sort (keys analysis))))
+                      {:ns ns}))
+              [ns (merge entry analysis)]))
+          sources)))
+
 (defmethod node/listing :clj/manifest [r m [ns & more]]
   (when (seq more) (fail "a manifest listing takes at most one namespace" {}))
-  (let [rows (for [[name entry] (namespaces r (:namespaces m))
+  (let [rows (for [[name entry] (namespace-entries r m)
                    :when (or (nil? ns) (= ns name))
                    [k link] (sort-by key entry)]
                {:name name :key k :link link})]
     (if ns
       (or (seq rows) (fail (str "no namespace " ns) {:ns ns}))
-      (concat [{:name "resources" :key :resources :link (:resources m)}
+      (concat [{:name "analyses" :key :analyses :link (:analyses m)}
+               {:name "resources" :key :resources :link (:resources m)}
                {:name "jars" :key :jars :link (:jars m)}]
               rows))))
 

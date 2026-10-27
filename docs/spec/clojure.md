@@ -19,10 +19,14 @@ An entry may carry:
 | `:source/clj` | File: JVM source (raw bytes of the `.clj` file) |
 | `:source/cljs` | File: ClojureScript source |
 | `:source/cljc` | File: portable source |
-| `:analysis/clj`, `:analysis/cljs`, `:analysis/cljc` | The `:clj/analysis` of the matching source |
 | `:children` | Tree: child namespaces |
 
 A file is a blob, or a chunked file for sources over 256 KiB.
+
+A namespace tree holds code only. Each source's analysis lives at the same
+path in a second tree, the manifest's `:analyses`, whose entries carry
+`:analysis/clj`, `:analysis/cljs` or `:analysis/cljc` (and `:children`), one
+for each source; see [Analysis meta-object](#analysis-meta-object).
 
 So `my.app` and `my.app.server` coexist, and one namespace may have sources for
 several platforms. The loader picks the source the way Clojure would: on the
@@ -34,13 +38,14 @@ A loadable program is a manifest object:
 
 ```clojure
 {:type       :clj/manifest
- :namespaces #h "sha256:..."   ; namespace tree root
+ :namespaces #h "sha256:..."   ; namespace tree root: sources only
+ :analyses   #h "sha256:..."   ; the same layout, with each source's analysis
  :resources  #h "sha256:..."   ; tree of non-source files
  :jars       #h "sha256:..."   ; tree of jars, each an opaque file
  :tags       {:clj/main "my.app"}}
 ```
 
-`:namespaces`, `:resources` and `:jars` are always present; an empty one is
+`:namespaces`, `:analyses`, `:resources` and `:jars` are always present; an empty one is
 the empty tree. `:tags` is optional (the importer doesn't set any yet).
 Resources are a plain directory tree (`{:link …}` and `{:children …}`
 entries) laid out by their path below a source root. Jars are entries named
@@ -127,10 +132,15 @@ without parsing source.
 `{:type :clj/analyzer :name "firmament.clojure" :version 1}`; its version
 goes up whenever the same source would be analyzed differently.
 
-**Analysis is linked from the namespace entry** (`:analysis/clj` beside
-`:source/clj`), so walking the namespace tree finds every source with its
-analysis, and no index is needed. The cost is that the namespace tree's
-hash depends on the analyzer version as well as the sources.
+**Analysis lives in its own tree**, the manifest's `:analyses`, laid out
+like the namespace tree: the analysis of `my.app`'s `:source/clj` is the
+`:analysis/clj` of entry `my` → `app`. So the namespace tree's hash depends
+only on the code, and an analyzer upgrade changes `:analyses` and the
+manifest but not `:namespaces`. Every source must have exactly one analysis
+and every analysis a source; a manifest where they don't match is
+rejected. Analyses travel with the manifest, so whoever fetches a program
+can load it without analyzing anything; saving an edited source means
+writing its new analysis too.
 
 ## Deferred
 
