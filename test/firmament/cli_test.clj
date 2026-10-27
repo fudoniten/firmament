@@ -50,3 +50,24 @@
       (is (str/includes? err "object not found")))
     (is (= 1 (:code (run store "get" "sha256:nothex"))))
     (is (= 1 (:code (run store "put" (str (.resolve (temp-dir) "missing"))))))))
+
+(deftest trees
+  (let [store (temp-dir)
+        dir (temp-dir)
+        _ (do (Files/createDirectories (.resolve dir "sub") (make-array java.nio.file.attribute.FileAttribute 0))
+              (write-file dir "a.txt" (.getBytes "a\n" "UTF-8"))
+              (write-file (.resolve dir "sub") "b.txt" (.getBytes "b\n" "UTF-8")))
+        {:keys [code out]} (run store "put" "-r" (str dir))
+        root (str/trim (String. ^bytes out "UTF-8"))]
+    (is (= 0 code))
+    (let [lines (str/split-lines (String. ^bytes (:out (run store "ls" root)) "UTF-8"))]
+      (is (= [(str (hash/blob-hash (.getBytes "a\n" "UTF-8")) "  a.txt")] (take 1 lines)))
+      (is (str/ends-with? (second lines) "  sub/")))
+    (is (str/ends-with? (str/trim (String. ^bytes (:out (run store "ls" root "sub")) "UTF-8"))
+                        "  b.txt"))
+    (let [target (.resolve (temp-dir) "out")]
+      (is (= 0 (:code (run store "export" root (str target)))))
+      (is (= "b\n" (String. (Files/readAllBytes (.resolve target "sub/b.txt")) "UTF-8"))))
+    (is (= 1 (:code (run store "ls" root "missing"))))
+    (is (= 2 (:code (run store "put" "-r"))))
+    (is (= 2 (:code (run store "export" root))))))

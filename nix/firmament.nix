@@ -45,7 +45,7 @@ in rec {
     src = libSrc;
   };
 
-  # Put a file through the built command and read it back.
+  # Put files and a directory through the built command and read them back.
   cli-smoke = pkgs.runCommand "firmament-cli-smoke"
     { nativeBuildInputs = [ firmament ]; } ''
       export FIRMAMENT_STORE=$PWD/store
@@ -55,6 +55,12 @@ in rec {
       expected="sha256:$({ printf 'blob\n'; cat small; } | sha256sum | cut -d' ' -f1)"
       [ "$(head -n1 refs)" = "$expected" ]
       firmament cat "$(sed -n 2p refs)" | cmp - big
+      mkdir -p dir/sub && cp small big dir/ && cp small dir/sub/
+      tree=$(firmament put -r dir)
+      firmament ls "$tree" sub | grep -q small
+      firmament export "$tree" out
+      diff -r dir out
+      [ "$(firmament put -r out)" = "$tree" ]
       touch $out
     '';
 

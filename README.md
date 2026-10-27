@@ -116,6 +116,7 @@ docs/
     objects.md       hashing, trust model, core node types
     chunking.md      chunker and chunk index
     store.md         local store layout (local state, not hashed)
+    directories.md   directory import and export
     clojure.md       Clojure layer (draft)
 deps.edn             Clojure project
 deps-lock.json       pinned Clojure dependencies, for Nix builds
@@ -127,6 +128,7 @@ src/firmament/
   chunk.clj          chunker and chunk index
   resolver.clj       fetching objects and files by hash
   store.clj          local content store
+  tree.clj           trees: path-copying updates, directory import and export
   cli.clj            the `firmament` command
 test/                Clojure tests, including the golden vectors
 reference/           Python reference implementation and vector generator
