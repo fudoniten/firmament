@@ -94,3 +94,21 @@ optional `:posix/mode` tag, which changes those hashes. See
 **Symbolic links are refused** rather than followed or stored, until there
 is a use for them.
 
+## 2026-10-27 — Clojure import
+
+**Analysis lives in the namespace entry**, as `:analysis/clj` (etc.) beside
+`:source/clj`, so one walk of the namespace tree finds sources and their
+requires. The namespace tree's hash therefore also depends on the analyzer
+version.
+
+**`:requires` is per platform.** A `.cljc` file is read once for `:clj` and
+once for `:cljs`, and their requires differ, so `:requires` is a map from
+platform to a sorted list.
+
+**The importer doesn't resolve dependencies.** Jars come from a classpath
+(`clojure -Spath`) or `:local/root` jar deps. Resolving Maven coordinates
+ourselves would mean reimplementing tools.deps and needing the network.
+
+**Files without an `ns` form are resources**, including `data_readers.clj`,
+so nothing under `:paths` is dropped.
+

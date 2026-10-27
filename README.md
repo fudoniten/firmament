@@ -130,6 +130,7 @@ src/firmament/
   node.clj           node types: validation and file contents, as multimethods
   store.clj          local content store
   tree.clj           trees: path-copying updates, directory import and export
+  clojure.clj        Clojure layer: project import, analysis, projection
   cli.clj            the `firmament` command
 test/                Clojure tests, including the golden vectors
 reference/           Python reference implementation and vector generator
