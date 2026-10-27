@@ -160,9 +160,11 @@ jar and a resource lookup.
 
 **Deliverables**
 
-- HTTP blob server: `GET /<hash>`, plus `PUT` for authorized pushes.
-- HTTP resolver, so the stack is local store → remote server.
-- Every fetched object verified against its hash.
+- [x] HTTP blob server: `GET` by hash, plus `PUT` for authorized pushes
+      ([docs/spec/http.md](docs/spec/http.md)). The URL layout is the store's
+      directory layout, so a static file server works as a remote too.
+- [x] HTTP resolver, so the stack is local store → remote server.
+- [x] Every fetched object verified against its hash.
 
 **Exit criteria**
 

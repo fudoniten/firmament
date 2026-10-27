@@ -3,27 +3,19 @@
   hash, with local metadata kept beside them and never hashed. Reading and
   writing objects goes through the protocols in firmament.storage."
   (:require [clojure.edn]
-            [clojure.set :as set]
             [firmament.edn :as edn]
             [firmament.hash :as hash]
             [firmament.storage :as storage])
-  (:import (java.nio ByteBuffer)
-           (java.nio.charset StandardCharsets)
+  (:import (java.nio.charset StandardCharsets)
            (java.nio.file AtomicMoveNotSupportedException CopyOption Files
                           LinkOption OpenOption Path Paths StandardCopyOption)
-           (java.nio.file.attribute FileAttribute)
-           (java.security MessageDigest)
-           (java.util Arrays HexFormat)))
+           (java.nio.file.attribute FileAttribute)))
 
 (set! *warn-on-reflection* true)
 
 (def format-version "firmament-0")
 
 (def ^:private ^"[Ljava.nio.file.OpenOption;" no-options (make-array OpenOption 0))
-
-(def ^:private kinds {:blob "blob\n" :edn "edn\n"})
-
-(def ^:private prefix->kind (set/map-invert kinds))
 
 (defn- fail [msg data]
   (throw (ex-info msg (assoc data ::error :store))))
@@ -66,21 +58,14 @@
           (Files/move tmp target (into-array CopyOption [StandardCopyOption/REPLACE_EXISTING]))))
       (finally (Files/deleteIfExists tmp)))))
 
-(defn- sha256-ref [^bytes data]
-  (str "sha256:" (.formatHex (HexFormat/of) (.digest (MessageDigest/getInstance "SHA-256") data))))
-
 (defn- read-object
   "Read and check the object file for `ref`: its bytes are the full hash
   input, so their SHA-256 must be `ref`."
   [^Path root ref]
   (let [p (object-path root ref)]
     (when (exists? p)
-      (let [data (Files/readAllBytes p)
-            nl (or (some #(when (= 10 (aget data %)) %) (range (min 8 (alength data)))) -1)
-            kind (when (pos? nl) (prefix->kind (utf8-str (Arrays/copyOf data (int (inc nl))))))]
-        (when-not (and kind (= ref (sha256-ref data)))
-          (fail (str "corrupt object: " ref) {:ref ref :path (str p)}))
-        {:kind kind :bytes (Arrays/copyOfRange data (int (inc nl)) (alength data))}))))
+      (or (hash/parse-object ref (Files/readAllBytes p))
+          (fail (str "corrupt object: " ref) {:ref ref :path (str p)})))))
 
 (defn- write-object!
   "Write the object file for `payload`, unless the store already has it."
@@ -88,11 +73,7 @@
   (let [ref (hash/object-hash kind payload)
         target (object-path root ref)]
     (when-not (exists? target)
-      (let [prefix (ascii (kinds kind))]
-        (write-atomically! root target
-                           (.array (doto (ByteBuffer/allocate (+ (alength prefix) (alength payload)))
-                                     (.put prefix)
-                                     (.put payload))))))
+      (write-atomically! root target (hash/object-bytes kind payload)))
     ref))
 
 (defrecord LocalStore [^Path root]
@@ -108,6 +89,12 @@
   metadata it is local and never hashed, and can be deleted at any time."
   ^Path [s]
   (path (:root s) "cache" "jars"))
+
+(defn object-file
+  "The path of the file that holds object `ref`, whether or not the store
+  has it."
+  ^Path [s ref]
+  (object-path (:root s) ref))
 
 (defn default-dir
   "Where the store is when no directory is given: $FIRMAMENT_STORE, else

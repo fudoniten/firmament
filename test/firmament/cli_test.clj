@@ -4,6 +4,8 @@
             [firmament.cli :as cli]
             [firmament.gen :as gen]
             [firmament.hash :as hash]
+            [firmament.http :as http]
+            [firmament.store :as store]
             [firmament.store-test :refer [temp-dir]])
   (:import (java.io ByteArrayInputStream ByteArrayOutputStream PrintStream)
            (java.nio.file Files OpenOption Path)
@@ -11,11 +13,13 @@
 
 (set! *warn-on-reflection* true)
 
+(def ^:private ^:dynamic *env* {})
+
 (defn- run-with-input [^String input store & args]
   (let [out (ByteArrayOutputStream.)
         err (ByteArrayOutputStream.)
         code (cli/run (concat ["--store" (str store)] args)
-                      {:env {} :out out :err (PrintStream. err true "UTF-8")
+                      {:env *env* :out out :err (PrintStream. err true "UTF-8")
                        :in (ByteArrayInputStream. (.getBytes input "UTF-8"))})]
     {:code code :out (.toByteArray out) :err (.toString err "UTF-8")}))
 
@@ -116,4 +120,23 @@
       (is (= "[\"HELLO, STORE!\" {:who \"params\"}]\n" (String. ^bytes out "UTF-8"))))
     (is (= 2 (:code (run local "run"))))
     (is (= 2 (:code (run local "run" root p "extra"))))))
+
+(deftest serving
+  (let [a (temp-dir)
+        root (str/trim (String. ^bytes (:out (run a "import" "test-resources/projects/app" "--main" "app.core")) "UTF-8"))
+        server-store (store/open (temp-dir))
+        ^com.sun.net.httpserver.HttpServer server (http/serve! server-store :port 0 :token "secret")
+        url (http/server-url server)]
+    (try
+      (testing "push needs the token"
+        (is (= 1 (:code (run a "push" url root)))))
+      (binding [*env* {"FIRMAMENT_TOKEN" "secret"}]
+        (let [{:keys [code out err]} (run a "push" url root)]
+          (is (= 0 code) err)
+          (is (pos? (parse-long (str/trim (String. ^bytes out "UTF-8"))))))
+        (is (= "0\n" (String. ^bytes (:out (run a "push" url root)) "UTF-8"))))
+      (let [{:keys [code out err]} (run (temp-dir) "run" "--from" url root "--" "b")]
+        (is (= 0 code) err)
+        (is (= "[\"HELLO, STORE!\" \"b\"]\n" (String. ^bytes out "UTF-8"))))
+      (finally (.stop server 0)))))
 
