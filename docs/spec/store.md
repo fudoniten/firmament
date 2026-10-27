@@ -13,7 +13,12 @@ so that stores stay readable across versions of this code.
   objects/ab/cdef…    one file per object
   meta/ab/cdef….edn   local metadata for an object, if any
   tmp/                files being written
+  cache/jars/<hex>.jar  jars written out for the loader, named by hash
 ```
+
+`cache/` holds copies of objects in forms other code needs, such as jars a
+classloader can open. Like `meta/` it is local and never hashed, and it can
+be deleted at any time.
 
 **Where the store is.** Tools use the directory named by the
 `FIRMAMENT_STORE` environment variable, or `~/.firmament/store` when it is

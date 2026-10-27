@@ -116,3 +116,24 @@ ourselves would mean reimplementing tools.deps and needing the network.
 **Files without an `ns` form are resources**, including `data_readers.clj`,
 so nothing under `:paths` is dropped.
 
+## 2026-10-27 — Loader
+
+**One classloader per manifest**, installed as `Compiler/LOADER` and the
+context classloader for a `with-root` session, rather than a classloader
+that reads `*ns-root*`. Classloaders aren't aware of dynamic bindings, and
+Clojure caches the loader in compiled code.
+
+**The manifest comes first for resources, and the parent comes first for
+classes.** A program's own namespaces and resources win over anything the
+host JVM has on its classpath. Clojure itself and the JDK always come from
+the host, so there is one `clojure.lang.RT`.
+
+**Paths are mapped forward, not parsed.** Munging loses information
+(`my_app` could be `my-app` or `my_app`), so the loader builds a table from
+each namespace's projected path to its source. It doesn't try to demunge
+the path it's asked for.
+
+**Jars are written to disk by hash.** Opening jars from memory would need a
+custom jar reader, and jars rarely change, so each one is written out once
+per store.
+

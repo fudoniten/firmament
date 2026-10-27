@@ -113,12 +113,12 @@ checkout.
 
 **Deliverables**
 
-- Root binding: `*ns-root*` bound to a manifest hash for a load session.
-- A namespace-native `require` for our own code.
-- A compatibility classloader that maps path requests (`my/app_server.clj`)
-  back to namespaces and serves the right platform source, so
-  `clojure.core/require`, `io/resource` and existing tooling work unmodified.
-- Jars from `:jars` made available to the classloader.
+- [x] Root binding: `*ns-root*` bound to a manifest hash for a load session.
+- [x] A namespace-native `require` for our own code.
+- [x] A compatibility classloader that maps path requests (`my/app_server.clj`)
+      back to namespaces and serves the right platform source, so
+      `clojure.core/require`, `io/resource` and existing tooling work unmodified.
+- [x] Jars from `:jars` made available to the classloader.
 
 **Technical risks to resolve early**
 

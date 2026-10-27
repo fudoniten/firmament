@@ -104,12 +104,45 @@ can't be projected.
 
 ## Loading
 
-Our own `require` can take namespace names and look them up in the tree
-directly. Existing code and libraries call `clojure.core/require`, which asks
-the classloader for a path such as `my/app_server.clj`. A compatibility
-classloader translates that request straight back into a namespace
-(`my.app-server`) and platform, and serves the matching source. Paths are
-handled only at this edge and never reach the store.
+Code is loaded from a manifest, never from a checkout. `firmament.loader`
+builds **one classloader per manifest**. Inside `(with-root [store H] ...)`
+that classloader is Clojure's base loader (`Compiler/LOADER`) and the
+thread's context classloader, and `*ns-root*` is bound to H. So
+`clojure.core/require`, `load`, `io/resource` and existing tooling work
+unmodified.
+
+The classloader answers resource lookups like this:
+
+1. **Sources.** Clojure asks for a path such as `my/app_server.clj`. The
+   loader serves the source of the namespace whose path that is, so
+   `my.app-server`'s `:source/clj`. Clojure asks for `.clj` before `.cljc`,
+   so on the JVM `:source/clj` wins. The table from paths to namespaces is
+   built from the namespace tree when the loader is made; only tree nodes
+   are read, and sources are fetched when they're loaded. Two namespaces that
+   map to the same path (`my.a-b` and `my.a_b`) are refused.
+2. **Resources**, at their path in the `:resources` tree.
+3. **Everything else, and every class**, goes first to the parent
+   classloader, which provides Clojure itself, and then to the manifest's
+   jars.
+
+Sources and resources are served from `firmament:` URLs and read from the
+store when they're opened. Jars need to be real files for the JVM to open
+them, so each one is written once to a cache directory, named by its hash
+(`cache/jars/` in a local store).
+
+`load-ns!` loads a namespace by name rather than by path: it takes the
+namespace's entry, reads its source and marks the namespace loaded, as
+`require` would. The namespaces that source requires then load through the
+classloader.
+
+**One version per JVM.** `*loaded-libs*` is global, so once a namespace is
+loaded, a second root in the same JVM won't load it again unless it is
+reloaded explicitly (`:reload`). This is expected, and it is left as it
+is.
+
+`firmament repl H` starts a Clojure REPL inside `with-root`. With nothing but
+the store and H, `(require 'my.app)` loads the program, its jars and its
+resources.
 
 ## Analysis meta-object
 

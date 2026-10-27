@@ -103,6 +103,12 @@
   storage/Store
   (put-object! [_ kind payload] (write-object! root kind payload)))
 
+(defn jar-dir
+  "Where jars are written out for loading (cache/jars), named by hash. Like
+  metadata it is local and never hashed, and can be deleted at any time."
+  ^Path [s]
+  (path (:root s) "cache" "jars"))
+
 (defn default-dir
   "Where the store is when no directory is given: $FIRMAMENT_STORE, else
   ~/.firmament/store. `env` is a map of environment variables."
