@@ -145,7 +145,13 @@ is.
 
 `firmament repl H` starts a Clojure REPL inside `with-root`. With nothing but
 the store and H, `(require 'my.app)` loads the program, its jars and its
-resources.
+resources. The REPL's first line names the manifest it loads from.
+
+**The empty program** is the manifest whose four trees are all empty. Its
+hash is the same in every store (`firmament.clojure/empty-manifest!`), and
+`firmament repl` with no hash starts from it, giving a plain Clojure REPL.
+It is the starting state for a REPL whose loaded code will one day have a
+hash of its own.
 
 ## Running
 

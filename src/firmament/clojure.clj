@@ -279,6 +279,18 @@
                                              :jars (tree/put-paths! s jars)}
                                       main (assoc :tags {:clj/main (str main)}))))))
 
+(defn empty-manifest!
+  "Store the empty program, a manifest whose trees are all empty, and return
+  its link. Its hash is the same in every store: the starting point for a
+  REPL that hasn't loaded anything from the store yet."
+  [s]
+  (let [empty (tree/put-paths! s {})]
+    (edn/link (storage/put-value! s {:type :clj/manifest
+                                     :namespaces empty
+                                     :analyses empty
+                                     :resources empty
+                                     :jars empty}))))
+
 ;; ------------------------------------------------------------- namespaces
 
 (defn namespaces

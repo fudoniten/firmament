@@ -101,7 +101,14 @@
                                                store "repl" root)]
     (is (= 0 code) err)
     (is (str/includes? (String. ^bytes out "UTF-8") "\"HELLO, STORE!\""))
-    (is (= 2 (:code (run store "repl"))))))
+    (is (str/includes? (String. ^bytes out "UTF-8") (str ";; firmament: loading from " root)))
+    (testing "without a hash, a plain Clojure REPL on the empty program"
+      (let [{:keys [code out err]} (run-with-input "(+ 1 2)\n" store "repl")
+            out (String. ^bytes out "UTF-8")]
+        (is (= 0 code) err)
+        (is (str/includes? out "(the empty program)"))
+        (is (str/includes? out "3"))))
+    (is (= 2 (:code (run store "repl" root root))))))
 
 (deftest running
   (let [remote (temp-dir)
