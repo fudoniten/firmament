@@ -158,3 +158,11 @@
                             (import! s :classpath "src:/somewhere/else"))))
     (is (thrown? clojure.lang.ExceptionInfo
                  (node/validate {:type :clj/manifest :namespaces "nope"})))))
+
+(deftest the-empty-program
+  (let [a (clj/empty-manifest! (storage/memory-store))]
+    (is (= a (clj/empty-manifest! (storage/memory-store))) "the same hash in every store")
+    (let [s (storage/memory-store)]
+      (clj/empty-manifest! s)
+      (is (= [] (clj/namespace-entries s (clj/manifest s a)))))))
+

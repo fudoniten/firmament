@@ -61,9 +61,11 @@ Commands:
                 copy HASH and everything it links to into STORE (a directory, or
                 a URL with $FIRMAMENT_TOKEN as the token); print how many
                 objects were sent
-  repl HASH     start a Clojure REPL that loads code from the manifest at
+  repl [HASH]   start a Clojure REPL that loads code from the manifest at
                 HASH: (require 'my.app) reads my.app from the store, and
-                io/resource and the manifest's jars work as on a classpath
+                io/resource and the manifest's jars work as on a classpath.
+                Without HASH, the REPL starts from the empty program: plain
+                Clojure
 
 The store is DIR if given, else $FIRMAMENT_STORE, else ~/.firmament/store.
 HASH is written sha256:<hex>.")
@@ -157,10 +159,14 @@ HASH is written sha256:<hex>.")
   nil)
 
 (defn- repl-command [s args ^OutputStream out]
-  (let [root (hash-arg "repl" args)
+  (when (< 1 (count args))
+    (usage-error "repl takes at most one hash"))
+  (let [root (if (seq args) (hash-arg "repl" args) (clj/empty-manifest! s))
         out (OutputStreamWriter. out StandardCharsets/UTF_8)]
     (loader/with-root [s root :jar-dir (store/jar-dir s)]
       (binding [*out* out]
+        (println (str ";; firmament: loading from " (edn/link-ref root)
+                      (when (empty? args) " (the empty program)")))
         (clojure.main/repl)
         (flush))))
   nil)
