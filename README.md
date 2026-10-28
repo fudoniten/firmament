@@ -154,7 +154,7 @@ firmament run HASH -- args       # call my.app/-main
 firmament repl                   # plain Clojure, on the empty program
 ```
 
-Without Nix, `nix run github:fudoniten/firmament -- COMMAND ...` runs the same
+Outside the dev shell, `nix run github:fudoniten/firmament -- COMMAND ...` runs the same
 command. Git and local-directory deps aren't supported yet, only Maven jars
 and `:local/root` jars.
 
