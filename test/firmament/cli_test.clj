@@ -2,11 +2,14 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [firmament.cli :as cli]
+            [firmament.clojure :as clj]
+            [firmament.edn :as edn]
             [firmament.gen :as gen]
             [firmament.hash :as hash]
             [firmament.http :as http]
             [firmament.store :as store]
-            [firmament.store-test :refer [temp-dir]])
+            [firmament.store-test :refer [temp-dir]]
+            [firmament.tree :as tree])
   (:import (java.io ByteArrayInputStream ByteArrayOutputStream PrintStream)
            (java.nio.file Files OpenOption Path)
            (java.util Arrays)))
@@ -146,4 +149,33 @@
         (is (= 0 code) err)
         (is (= "[\"HELLO, STORE!\" \"b\"]\n" (String. ^bytes out "UTF-8"))))
       (finally (.stop server 0)))))
+
+(deftest import-resolves-the-classpath
+  (let [dir (temp-dir)
+        bin (temp-dir)
+        fake (.resolve bin "clojure")]
+    (spit (str (.resolve dir "deps.edn")) "{:deps {some/lib {:mvn/version \"1.0\"}}}")
+    (Files/createDirectories (.resolve dir "src") (make-array java.nio.file.attribute.FileAttribute 0))
+    (spit (str (.resolve dir "src/a.clj")) "(ns a)")
+    (Files/copy (.toPath (java.io.File. "test-resources/projects/sample/lib/vendored.jar"))
+                (.resolve dir "lib.jar")
+                ^"[Ljava.nio.file.CopyOption;" (make-array java.nio.file.CopyOption 0))
+    ;; A stand-in for the Clojure CLI, which must be run in the project.
+    (spit (str fake) "#!/bin/sh\n[ -f deps.edn ] && echo src:lib.jar\n")
+    (.setExecutable (.toFile fake) true)
+    (let [store (temp-dir)
+          {:keys [code out err]} (binding [*env* {"FIRMAMENT_CLOJURE" (str fake)}]
+                                   (run store "import" (str dir)))
+          root (str/trim (String. ^bytes out "UTF-8"))]
+      (is (= 0 code) err)
+      (let [s (store/open store)]
+        (is (= ["lib.jar"] (map key (tree/ls s (:jars (clj/manifest s (edn/link root))) []))))))
+    (testing "without the Clojure CLI, import says what to do"
+      (let [{:keys [code err]} (binding [*env* {"FIRMAMENT_CLOJURE" (str (.resolve bin "missing"))}]
+                                 (run (temp-dir) "import" (str dir)))]
+        (is (= 1 code))
+        (is (str/includes? err "pass --classpath"))))
+    (testing "--classpath skips the CLI"
+      (binding [*env* {"FIRMAMENT_CLOJURE" (str (.resolve bin "missing"))}]
+        (is (= 0 (:code (run (temp-dir) "import" (str dir) "--classpath" "lib.jar"))))))))
 
