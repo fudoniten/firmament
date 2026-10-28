@@ -15,6 +15,7 @@
             [firmament.tree :as tree])
   (:import (clojure.lang LineNumberingPushbackReader)
            (java.io InputStream InputStreamReader OutputStream OutputStreamWriter PrintStream)
+           (java.lang ProcessBuilder$Redirect)
            (java.nio.charset StandardCharsets)
            (java.nio.file Files Paths))
   (:gen-class))
@@ -36,8 +37,9 @@ Commands:
                 file)
   import DIR [--classpath CP] [--main NS]
                 import the deps.edn project in DIR; print its manifest's hash.
-                Jars come from CP (e.g. the output of clojure -Spath) and from
-                :local/root jar deps. NS is the namespace run starts
+                Jars come from CP and from :local/root jar deps. Without CP,
+                if the project has deps to resolve, CP is the output of
+                clojure -Spath run in DIR. NS is the namespace run starts
   ls HASH [PATH]
                 list a tree, or the subtree at PATH (a/b/c) below it; or list
                 a manifest's namespaces, or the one named PATH. One line per
@@ -135,13 +137,42 @@ HASH is written sha256:<hex>.")
   (node/write-file! s (hash-arg "cat" args) out)
   nil)
 
+(defn- needs-classpath?
+  "Whether the deps.edn in `dir` has deps the Clojure CLI has to resolve:
+  anything but :local/root jars."
+  [dir]
+  (let [f (Paths/get (str dir) (into-array String ["deps.edn"]))]
+    (when (Files/exists f (make-array java.nio.file.LinkOption 0))
+      (->> (:deps (clojure.edn/read-string (String. (Files/readAllBytes f) StandardCharsets/UTF_8)))
+           vals
+           (some #(not (str/ends-with? (str (:local/root %)) ".jar")))))))
+
+(defn- resolve-classpath
+  "The project's classpath, from `clojure -Spath` run in `dir`. The command
+  is $FIRMAMENT_CLOJURE if set, else clojure."
+  [dir]
+  (let [cmd (or (not-empty (get *env* "FIRMAMENT_CLOJURE")) "clojure")
+        p (try (-> (ProcessBuilder. ^"[Ljava.lang.String;" (into-array String [cmd "-Spath"]))
+                   (.directory (java.io.File. (str dir)))
+                   (.redirectError ProcessBuilder$Redirect/INHERIT)
+                   (.start))
+               (catch java.io.IOException _
+                 (throw (ex-info (str "this project's deps need resolving, but " cmd
+                                      " (the Clojure CLI) couldn't be run; install it, or pass --classpath CP")
+                                 {}))))
+        out (slurp (.getInputStream ^Process p))]
+    (when-not (zero? (.waitFor ^Process p))
+      (throw (ex-info (str cmd " -Spath failed in " dir) {})))
+    (str/trim out)))
+
 (defn- import-command [s args _]
   (let [[dir & opts] args
         {:strs [--classpath --main] :as opts} (when (even? (count opts)) (apply hash-map opts))]
     (when (or (nil? dir) (odd? (count (rest args)))
               (seq (remove #{"--classpath" "--main"} (keys opts))))
       (usage-error "import takes a directory, and optionally --classpath CP and --main NS"))
-    [(edn/link-ref (clj/import-project! s dir :classpath --classpath :main --main))]))
+    (let [classpath (or --classpath (when (needs-classpath? dir) (resolve-classpath dir)))]
+      [(edn/link-ref (clj/import-project! s dir :classpath classpath :main --main))])))
 
 (defn- ls-line [{:keys [name key link]}]
   (str (edn/link-ref link) "  " name

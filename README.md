@@ -142,6 +142,22 @@ test-resources/
   vectors/           golden vectors
 ```
 
+## Trying it
+
+```
+cd firmament && nix develop      # prints the store directory; FIRMAMENT_STORE=DIR nix develop for another
+cd ~/src/my-project
+firmament import . --main my.app # prints the program's hash; runs clojure -Spath for Maven deps
+firmament ls HASH                # what was imported
+firmament repl HASH              # a REPL loading from the store: (require 'my.app)
+firmament run HASH -- args       # call my.app/-main
+firmament repl                   # plain Clojure, on the empty program
+```
+
+Without Nix, `nix run github:fudoniten/firmament -- COMMAND ...` runs the same
+command. Git and local-directory deps aren't supported yet, only Maven jars
+and `:local/root` jars.
+
 ## Development
 
 Enter the dev shell with `nix develop`, or install a JDK (21+), the Clojure

@@ -99,7 +99,15 @@ in rec {
   # Locks every alias, including :test and the :build alias the helpers add.
   updateDeps = helpers.updateClojureDeps { };
 
+  # nix develop: the tools to work on Firmament, and the `firmament` command
+  # built from this checkout. The store is $FIRMAMENT_STORE, so
+  # `FIRMAMENT_STORE=DIR nix develop` picks another one.
   devShell = pkgs.mkShell {
-    packages = [ pkgs.jdk21_headless pkgs.clojure pkgs.python3 ];
+    packages = [ firmament pkgs.jdk21_headless pkgs.clojure pkgs.python3 ];
+    shellHook = ''
+      export FIRMAMENT_STORE="''${FIRMAMENT_STORE:-$HOME/.firmament/store}"
+      echo "firmament store: $FIRMAMENT_STORE"
+      echo "  (FIRMAMENT_STORE=DIR nix develop to use another; firmament --help for commands)"
+    '';
   };
 }
