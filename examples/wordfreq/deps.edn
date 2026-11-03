@@ -1,0 +1,7 @@
+{:paths ["src" "resources"]
+ :deps {org.clojure/clojure {:mvn/version "1.12.5"}
+        org.clojure/data.json {:mvn/version "2.5.1"}}
+ :aliases
+ {;; clojure -M:test, or firmament import . --alias test --main wordfreq.test-runner
+  :test {:extra-paths ["test"]
+         :main-opts ["-m" "wordfreq.test-runner"]}}}

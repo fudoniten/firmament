@@ -136,6 +136,7 @@ src/firmament/
   runner.clj         running a manifest: closure prefetch, -main with params
   http.clj           stores over HTTP: client, server, push
   cli.clj            the `firmament` command
+examples/wordfreq/   a small project to try Firmament on, with a walkthrough
 test/                Clojure tests, including the golden vectors
 reference/           Python reference implementation and vector generator
 test-resources/
@@ -151,8 +152,12 @@ firmament import . --main my.app # prints the program's hash; runs clojure -Spat
 firmament ls HASH                # what was imported
 firmament repl HASH              # a REPL loading from the store: (require 'my.app)
 firmament run HASH -- args       # call my.app/-main
+firmament import . --alias test --main my.test-runner   # the tests, as a program to run
 firmament repl                   # plain Clojure, on the empty program
 ```
+
+To try it on a small project first, [examples/wordfreq](examples/wordfreq)
+walks through importing, running, testing and using the REPL.
 
 Outside the dev shell, `nix run github:fudoniten/firmament -- COMMAND ...` runs the same
 command. Git and local-directory deps aren't supported yet, only Maven jars

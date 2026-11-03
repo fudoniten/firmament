@@ -143,6 +143,24 @@
               "firmament.storage" "firmament.tree"]
              (:clj (:requires (node/load s (:analysis/clj (nss "firmament.clojure"))))))))))
 
+(deftest aliases
+  (testing "the example project, with and without its :test alias"
+    (let [s (storage/memory-store)
+          nss #(sort (map first (clj/namespace-entries s (clj/manifest s %))))
+          app (clj/import-project! s "examples/wordfreq" :main 'wordfreq.main)
+          tests (clj/import-project! s "examples/wordfreq" :aliases [:test] :main 'wordfreq.test-runner)]
+      (is (= ["wordfreq.core" "wordfreq.main" "wordfreq.report"] (nss app)))
+      (is (= ["wordfreq.core" "wordfreq.core-test" "wordfreq.main" "wordfreq.report"
+              "wordfreq.report-test" "wordfreq.test-runner"]
+             (nss tests)))
+      (is (= (:resources (clj/manifest s app)) (:resources (clj/manifest s tests))))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no alias :nope"
+                            (clj/import-project! s "examples/wordfreq" :aliases [:nope])))))
+  (is (= {:paths ["src" "test"] :deps {'a/a {:local/root "a.jar"}}
+          :aliases {:t {:extra-paths ["test" "src"] :extra-deps {'a/a {:local/root "a.jar"}}}}}
+         (clj/with-aliases {:aliases {:t {:extra-paths ["test" "src"] :extra-deps {'a/a {:local/root "a.jar"}}}}}
+                           [:t]))))
+
 (deftest refusals
   (let [s (storage/memory-store)]
     (testing "two files for the same namespace and platform"

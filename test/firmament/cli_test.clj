@@ -175,6 +175,18 @@
                                  (run (temp-dir) "import" (str dir)))]
         (is (= 1 code))
         (is (str/includes? err "pass --classpath"))))
+    (testing "--alias is passed on to the CLI as -A"
+      (let [aliased (.resolve bin "clojure-aliased")]
+        (spit (str aliased) "#!/bin/sh\n[ \"$1\" = -A:dev:test ] && echo src:lib.jar\n")
+        (.setExecutable (.toFile aliased) true)
+        (spit (str (.resolve dir "deps.edn"))
+              "{:aliases {:dev {} :test {:extra-deps {some/lib {:mvn/version \"1.0\"}}}}}")
+        (binding [*env* {"FIRMAMENT_CLOJURE" (str aliased)}]
+          (let [{:keys [code err]} (run (temp-dir) "import" (str dir) "--alias" ":dev:test")]
+            (is (= 0 code) err))
+          (is (= 0 (:code (run (temp-dir) "import" (str dir))))
+              "without the alias there's nothing to resolve")
+          (is (= 1 (:code (run (temp-dir) "import" (str dir) "--alias" "nope")))))))
     (testing "--classpath skips the CLI"
       (binding [*env* {"FIRMAMENT_CLOJURE" (str (.resolve bin "missing"))}]
         (is (= 0 (:code (run (temp-dir) "import" (str dir) "--classpath" "lib.jar"))))))))
