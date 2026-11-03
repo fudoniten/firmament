@@ -84,6 +84,12 @@ colliding with the resources subtree.
   never resolves dependencies itself.
 - **`--main NS`** records the namespace to run as the `:clj/main` tag. It
   must be one of the project's namespaces.
+- **`--alias A`** (`test`, or `:test:dev` for several) adds those aliases'
+  `:extra-paths` to the `:paths` and their `:extra-deps` to the deps, as
+  `clojure -A` does, and is passed on as `-A` when import runs
+  `clojure -Spath`. Other alias keys are ignored. This is how a project's
+  tests are imported: `--alias test --main my.test-runner` gives a program
+  that runs them.
 
 Importing the same project always gives the same manifest hash.
 

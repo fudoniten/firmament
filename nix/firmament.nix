@@ -85,7 +85,7 @@ in rec {
   # clojure -M:test, including the golden vectors.
   clojure-tests = helpers.mkClojureTests {
     name = "firmament";
-    src = source [ ../deps.edn ../deps-lock.json ../src ../test ../test-resources ];
+    src = source [ ../deps.edn ../deps-lock.json ../src ../test ../test-resources ../examples ];
   };
 
   reference-tests = pythonCheck "firmament-reference-tests" ''

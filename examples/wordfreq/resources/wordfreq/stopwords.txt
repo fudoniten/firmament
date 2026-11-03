@@ -1,0 +1,26 @@
+# One word per line; lines starting with # are comments.
+a
+an
+and
+are
+as
+at
+be
+but
+by
+for
+from
+has
+in
+is
+it
+its
+of
+on
+or
+that
+the
+to
+was
+were
+with

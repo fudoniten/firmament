@@ -35,11 +35,13 @@ Commands:
                 canonical EDN
   cat HASH      print the contents of the file at HASH (a blob or a chunked
                 file)
-  import DIR [--classpath CP] [--main NS]
+  import DIR [--classpath CP] [--main NS] [--alias A]
                 import the deps.edn project in DIR; print its manifest's hash.
                 Jars come from CP and from :local/root jar deps. Without CP,
                 if the project has deps to resolve, CP is the output of
-                clojure -Spath run in DIR. NS is the namespace run starts
+                clojure -Spath run in DIR. NS is the namespace run starts.
+                A names deps.edn aliases (test, or :test:dev) whose
+                :extra-paths and :extra-deps are added, as with clojure -A
   ls HASH [PATH]
                 list a tree, or the subtree at PATH (a/b/c) below it; or list
                 a manifest's namespaces, or the one named PATH. One line per
@@ -138,21 +140,33 @@ HASH is written sha256:<hex>.")
   nil)
 
 (defn- needs-classpath?
-  "Whether the deps.edn in `dir` has deps the Clojure CLI has to resolve:
-  anything but :local/root jars."
-  [dir]
+  "Whether the deps.edn in `dir`, with `aliases`, has deps the Clojure CLI
+  has to resolve: anything but :local/root jars."
+  [dir aliases]
   (let [f (Paths/get (str dir) (into-array String ["deps.edn"]))]
     (when (Files/exists f (make-array java.nio.file.LinkOption 0))
-      (->> (:deps (clojure.edn/read-string (String. (Files/readAllBytes f) StandardCharsets/UTF_8)))
+      (->> (:deps (clj/with-aliases (clojure.edn/read-string (String. (Files/readAllBytes f) StandardCharsets/UTF_8))
+                                    aliases))
            vals
            (some #(not (str/ends-with? (str (:local/root %)) ".jar")))))))
 
+(defn- parse-aliases
+  "The aliases named by --alias: test, :test or :test:dev."
+  [^String spec]
+  (when spec
+    (let [names (remove empty? (str/split spec #":"))]
+      (when (empty? names) (usage-error (str "not an alias: " spec)))
+      (mapv keyword names))))
+
 (defn- resolve-classpath
-  "The project's classpath, from `clojure -Spath` run in `dir`. The command
-  is $FIRMAMENT_CLOJURE if set, else clojure."
-  [dir]
+  "The project's classpath, from `clojure -Spath` run in `dir`, with -A for
+  `aliases`. The command is $FIRMAMENT_CLOJURE if set, else clojure."
+  [dir aliases]
   (let [cmd (or (not-empty (get *env* "FIRMAMENT_CLOJURE")) "clojure")
-        p (try (-> (ProcessBuilder. ^"[Ljava.lang.String;" (into-array String [cmd "-Spath"]))
+        argv (cond-> [cmd]
+               (seq aliases) (conj (apply str "-A" aliases))
+               :always (conj "-Spath"))
+        p (try (-> (ProcessBuilder. ^"[Ljava.lang.String;" (into-array String argv))
                    (.directory (java.io.File. (str dir)))
                    (.redirectError ProcessBuilder$Redirect/INHERIT)
                    (.start))
@@ -167,12 +181,13 @@ HASH is written sha256:<hex>.")
 
 (defn- import-command [s args _]
   (let [[dir & opts] args
-        {:strs [--classpath --main] :as opts} (when (even? (count opts)) (apply hash-map opts))]
+        {:strs [--classpath --main --alias] :as opts} (when (even? (count opts)) (apply hash-map opts))]
     (when (or (nil? dir) (odd? (count (rest args)))
-              (seq (remove #{"--classpath" "--main"} (keys opts))))
-      (usage-error "import takes a directory, and optionally --classpath CP and --main NS"))
-    (let [classpath (or --classpath (when (needs-classpath? dir) (resolve-classpath dir)))]
-      [(edn/link-ref (clj/import-project! s dir :classpath classpath :main --main))])))
+              (seq (remove #{"--classpath" "--main" "--alias"} (keys opts))))
+      (usage-error "import takes a directory, and optionally --classpath CP, --main NS and --alias A"))
+    (let [aliases (parse-aliases --alias)
+          classpath (or --classpath (when (needs-classpath? dir aliases) (resolve-classpath dir aliases)))]
+      [(edn/link-ref (clj/import-project! s dir :classpath classpath :main --main :aliases aliases))])))
 
 (defn- ls-line [{:keys [name key link]}]
   (str (edn/link-ref link) "  " name

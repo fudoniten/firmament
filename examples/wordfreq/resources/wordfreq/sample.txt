@@ -1,0 +1,6 @@
+A file is a hash. A directory is a hash of a listing of names to hashes.
+A namespace is a tree, and a program is a manifest that links to its
+namespaces, its resources and its jars. Give someone the hash of the
+manifest and they can run the program; give them the next hash and they
+can run the next program. The hash names the program, and the program
+checks itself against the hash.

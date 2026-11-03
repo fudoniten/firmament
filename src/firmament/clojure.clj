@@ -217,6 +217,20 @@
                 (.normalize (.toAbsolutePath (.resolve dir ^String root))))]
     (distinct (remove nil? (concat from-cp local)))))
 
+(defn with-aliases
+  "deps.edn map `deps` with the :extra-paths and :extra-deps of each alias
+  in `aliases` (keywords) added, as clojure -A adds them, and :paths
+  defaulted to [\"src\"]."
+  [deps aliases]
+  (reduce (fn [deps a]
+            (let [alias (or (get-in deps [:aliases a])
+                            (fail (str "deps.edn has no alias " a) {:alias a}))]
+              (-> deps
+                  (update :paths #(vec (distinct (concat % (:extra-paths alias)))))
+                  (update :deps merge (:extra-deps alias)))))
+          (update deps :paths #(or % ["src"]))
+          aliases))
+
 (defn- add-source
   "Add a source to the :namespaces of `acc`, and its analysis at the same
   path in the :analyses; both are maps of namespace paths to entries."
@@ -253,11 +267,14 @@
   filed under the namespace it declares with its analysis at the same path
   in a separate tree, or a resource. Jars come from
   `:classpath` (`clojure -Spath` output) and :local/root jar deps. `:main`
-  names the namespace to run, recorded as the :clj/main tag."
-  [s dir & {:keys [classpath main]}]
+  names the namespace to run, recorded as the :clj/main tag. `:aliases`
+  (keywords) adds those deps.edn aliases' :extra-paths and :extra-deps, as
+  clojure -A does: import with a :test alias to get a program that holds
+  the tests too."
+  [s dir & {:keys [classpath main aliases]}]
   (let [dir (->path dir)
-        deps (read-deps dir)
-        paths (get deps :paths ["src"])
+        deps (with-aliases (read-deps dir) aliases)
+        paths (:paths deps)
         _ (when-not (every? string? paths)
             (fail "only string :paths are supported" {:paths paths}))
         analyzer-link (edn/link (storage/put-value! s analyzer))

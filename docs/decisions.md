@@ -175,3 +175,14 @@ PLAN.md).
 **No dependencies.** The client is `java.net.http` and the server is the
 JDK's `com.sun.net.httpserver`.
 
+
+## 2026-11-03 — Tests as a program
+
+**Tests are imported as their own program, with `import --alias test`.**
+The importer adds an alias's `:extra-paths` and `:extra-deps`, as
+`clojure -A` does, and passes `-A` on when it runs `clojure -Spath`. A
+project's tests then become a second manifest, `--main` naming a test
+runner, that shares every source, resource and jar with the program
+itself; `firmament run` on it runs the tests, and its hash names exactly
+the code that passed them. Only `:extra-paths` and `:extra-deps` are read:
+`:main-opts`, `:replace-deps` and the rest are left to the Clojure CLI.
