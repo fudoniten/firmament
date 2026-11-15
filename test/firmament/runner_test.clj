@@ -7,7 +7,8 @@
             [firmament.node :as node]
             [firmament.runner :as runner]
             [firmament.storage :as storage]
-            [firmament.store-test :refer [temp-dir]])
+            [firmament.store-test :refer [temp-dir]]
+            [firmament.tree :as tree])
   (:import (java.nio.charset StandardCharsets)
            (java.nio.file CopyOption Files LinkOption OpenOption Path)
            (java.nio.file.attribute FileAttribute)))
@@ -44,7 +45,7 @@
 (deftest running
   (let [remote (storage/memory-store)
         root (clj/import-project! remote app :main 'app.core)
-        params (edn/link (storage/put-value! remote {:who "params"}))]
+        params (storage/put-value! remote {:who "params"})]
     (testing "from an empty local store, with arguments"
       (let [r (storage/cache (storage/memory-store) remote)]
         (is (= "[\"HELLO, STORE!\" \"a\" \"b\"]\n"
@@ -85,9 +86,9 @@
         ;; The manifest; the root and app trees of :namespaces and of
         ;; :analyses; app.text-util's new source and new analysis.
         (is (= 7 (count @fetched)))
-        (is (contains? @fetched (edn/link-ref root')))
-        (is (not (contains? @fetched (edn/link-ref (:jars m')))))
-        (is (not (contains? @fetched (edn/link-ref (:resources m')))))))))
+        (is (contains? @fetched root'))
+        (is (not (contains? @fetched (:jars m'))))
+        (is (not (contains? @fetched (:resources m'))))))))
 
 (deftest caches-check-what-they-copy
   (let [real (storage/memory-store)
@@ -103,7 +104,23 @@
       (let [big (byte-array (* 1024 1024) (byte 7))
             link (storage/put-file! real big)
             local (storage/memory-store)
-            names (storage/fetch-all! (storage/cache local real) (edn/link-ref link))]
+            names (storage/fetch-all! (storage/cache local real) link)]
         (is (< 1 (count names)))
         (is (every? #(storage/has? local %) names))
         (is (= (seq big) (seq (node/read-file local link))))))))
+
+(deftest host-mismatches
+  (let [s (storage/memory-store)
+        jar (storage/put-blob! s (.getBytes "not really a jar"))
+        manifest (fn [names]
+                   (clj/manifest s (storage/put-value!
+                                    s {:type :clj/manifest
+                                       :namespaces (tree/put-paths! s {})
+                                       :analyses (tree/put-paths! s {})
+                                       :resources (tree/put-paths! s {})
+                                       :jars (tree/put-paths! s (zipmap (map vector names)
+                                                                        (repeat {:link jar})))})))]
+    (is (empty? (runner/host-mismatches s (manifest [(str "clojure-" (clojure-version) ".jar")
+                                                     "spec.alpha-0.5.238.jar"]))))
+    (is (re-find #"imported with Clojure 1\.9\.0"
+                 (first (runner/host-mismatches s (manifest ["clojure-1.9.0.jar"])))))))

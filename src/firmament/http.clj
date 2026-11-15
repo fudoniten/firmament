@@ -4,36 +4,33 @@
   layout is the local store's own directory layout, so any static file
   server pointed at a store directory is a read-only remote too."
   (:require [clojure.string :as str]
+            [firmament.edn :as edn]
+            [firmament.error :as error]
             [firmament.hash :as hash]
-            [firmament.storage :as storage]
-            [firmament.store :as store])
+            [firmament.storage :as storage])
   (:import (com.sun.net.httpserver HttpExchange HttpHandler HttpServer)
            (java.io InputStream)
            (java.net InetSocketAddress URI)
            (java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers HttpResponse
                           HttpResponse$BodyHandlers)
            (java.nio.charset StandardCharsets)
-           (java.nio.file Files)
            (java.security MessageDigest)
            (java.time Duration)
            (java.util.concurrent Executors ThreadFactory)))
 
 (set! *warn-on-reflection* true)
 
-(defn- fail [msg data]
-  (throw (ex-info msg (assoc data ::error :http))))
+(def ^:private fail (partial error/fail :http))
 
 (def max-object-size
   "The largest object a server accepts in a PUT. Files over 256 KiB are
   chunked, so real objects are far smaller."
   (* 16 1024 1024))
 
-(defn object-path
-  "The path of object `ref` below a store's base URL:
-  objects/ab/cdef… for sha256:abcdef…."
-  [ref]
-  (let [hex (subs ref (count "sha256:"))]
-    (str "objects/" (subs hex 0 2) "/" (subs hex 2))))
+(def object-path
+  "The path of object `link` below a store's base URL:
+  objects/ab/cdef… for sha256:abcdef…, the same as on disk."
+  hash/object-path)
 
 ;; ---------------------------------------------------------------- client
 
@@ -56,29 +53,29 @@
 
 (defrecord HttpStore [^HttpClient client ^String base token]
   storage/Resolver
-  (fetch [_ ref]
-    (let [resp (send! client (request base (object-path ref) :get nil token))]
+  (fetch [_ link]
+    (let [resp (send! client (request base (object-path link) :get nil token))]
       (case (.statusCode resp)
-        200 (or (hash/parse-object ref (.body resp))
-                (fail (str "the object served for " ref " doesn't match its hash")
-                      {:ref ref :uri (str (.uri resp))}))
+        200 (or (hash/parse-object link (.body resp))
+                (fail (str "the object served for " (edn/link-ref link) " doesn't match its hash")
+                      {:link link :uri (str (.uri resp))}))
         404 nil
-        (status-error resp (str "fetching " ref)))))
-  (has? [_ ref]
-    (let [resp (send! client (request base (object-path ref) :head nil token))]
+        (status-error resp (str "fetching " (edn/link-ref link))))))
+  (has? [_ link]
+    (let [resp (send! client (request base (object-path link) :head nil token))]
       (case (.statusCode resp)
         200 true
         404 false
-        (status-error resp (str "checking for " ref)))))
+        (status-error resp (str "checking for " (edn/link-ref link))))))
 
   storage/Store
   (put-object! [_ kind payload]
     (when-not token (fail (str "writing to " base " needs a token") {:base base}))
-    (let [ref (hash/object-hash kind payload)
-          resp (send! client (request base (object-path ref) :put (hash/object-bytes kind payload) token))]
+    (let [link (hash/object-link kind payload)
+          resp (send! client (request base (object-path link) :put (hash/object-bytes kind payload) token))]
       (when-not (#{200 201 204} (.statusCode resp))
-        (status-error resp (str "storing " ref)))
-      ref)))
+        (status-error resp (str "storing " (edn/link-ref link))))
+      link)))
 
 (defn http-store
   "The store at `base-url` (http:// or https://). Reads need nothing more;
@@ -94,8 +91,8 @@
     (when-not (= 200 (.statusCode resp))
       (status-error resp (str "reading the format of " base)))
     (let [v (str/trim (String. ^bytes (.body resp) StandardCharsets/UTF_8))]
-      (when-not (= store/format-version v)
-        (fail (str base " holds format " v ", not " store/format-version) {:base base :format v})))
+      (when-not (= hash/format-version v)
+        (fail (str base " holds format " v ", not " hash/format-version) {:base base :format v})))
     (->HttpStore client base token)))
 
 (defn url? [s] (boolean (re-find #"^https?://" (str s))))
@@ -129,28 +126,35 @@
     (let [method (.getRequestMethod ex)
           path (.getPath (.getRequestURI ex))
           [_ a b] (re-matches object-route path)
-          ref (when a (str "sha256:" a b))]
+          link (when a (edn/link (str "sha256:" a b)))]
       (cond
         (and (= "/format" path) (#{"GET" "HEAD"} method))
-        (respond! ex 200 (text store/format-version))
+        (respond! ex 200 (text hash/format-version))
 
-        (nil? ref) (respond! ex 404 (text "not found"))
+        (nil? link) (respond! ex 404 (text "not found"))
 
-        (#{"GET" "HEAD"} method)
-        (let [f (store/object-file s ref)]
-          (if (storage/has? s ref)
-            (respond! ex 200 (Files/readAllBytes f))
-            (respond! ex 404 (text "not found"))))
+        (= "HEAD" method)
+        (respond! ex (if (storage/has? s link) 200 404) nil)
+
+        (= "GET" method)
+        (if-let [{:keys [kind bytes]} (storage/fetch s link)]
+          (respond! ex 200 (hash/object-bytes kind bytes))
+          (respond! ex 404 (text "not found")))
 
         (= "PUT" method)
         (cond
           (not (authorized? ex token)) (respond! ex 403 (text "forbidden"))
           :else
           (let [data (read-limited (.getRequestBody ex) max-object-size)
-                {:keys [kind bytes]} (when data (hash/parse-object ref data))]
+                {:keys [kind bytes] :as object} (when data (hash/parse-object link data))
+                missing (when kind (remove #(storage/has? s %) (storage/object-links object)))]
             (cond
               (nil? data) (respond! ex 413 (text "too large"))
-              (nil? kind) (respond! ex 400 (text (str "body doesn't hash to " ref)))
+              (nil? kind) (respond! ex 400 (text (str "body doesn't hash to " (edn/link-ref link))))
+              ;; Children first, as in every store: that is what lets
+              ;; storage/copy! skip everything below an object a store has.
+              (seq missing) (respond! ex 409 (text (str "links to objects this store doesn't have, such as "
+                                                        (edn/link-ref (first missing)))))
               :else (do (storage/put-object! s kind bytes)
                         (respond! ex 204 nil)))))
 
@@ -160,7 +164,7 @@
     (finally (.close ex))))
 
 (defn serve!
-  "Serve local store `s` over HTTP on `port` (0 for any free port) at
+  "Serve store `s` (any storage/Resolver, and storage/Store for PUTs) over HTTP on `port` (0 for any free port) at
   address `bind`. GET and HEAD on objects/ab/cdef… and on format, as the
   store's directory holds them; PUT stores an object if the request has
   `token` as its bearer token and the body hashes to the name in the path.

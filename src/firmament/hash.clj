@@ -1,5 +1,10 @@
 (ns firmament.hash
-  "Object hashing (docs/spec/objects.md)."
+  "Object hashing (docs/spec/objects.md).
+
+  The *-hash functions give an object's name as text, \"sha256:<hex>\",
+  the form the spec and the golden vectors use. Everything above this
+  namespace names objects with links (firmament.edn/Link), which the
+  *-link functions give."
   (:require [firmament.edn :as edn])
   (:import (java.nio ByteBuffer)
            (java.nio.charset StandardCharsets)
@@ -8,52 +13,69 @@
 
 (set! *warn-on-reflection* true)
 
-(def ^:private blob-prefix (.getBytes "blob\n" StandardCharsets/US_ASCII))
-(def ^:private edn-prefix (.getBytes "edn\n" StandardCharsets/US_ASCII))
+(def format-version
+  "The format version this code reads and writes (docs/spec/objects.md,
+  Format versions). Stores record it, and refuse any other."
+  "firmament-0")
 
-(defn- sha256-ref [^bytes prefix ^bytes payload]
+(def ^:private prefixes
+  "Each kind of object, with the bytes its hash input starts with."
+  {:blob (.getBytes "blob\n" StandardCharsets/US_ASCII)
+   :edn (.getBytes "edn\n" StandardCharsets/US_ASCII)})
+
+(defn- prefix ^bytes [kind]
+  (or (prefixes kind) (throw (IllegalArgumentException. (str "unknown object kind: " kind)))))
+
+(defn object-hash
+  "The \"sha256:<hex>\" name of an object of `kind`, :blob or :edn, from
+  its payload: a blob's bytes or a structured object's canonical bytes."
+  [kind ^bytes payload]
   (let [md (MessageDigest/getInstance "SHA-256")]
-    (.update md prefix)
+    (.update md (prefix kind))
     (.update md payload)
     (str "sha256:" (.formatHex (HexFormat/of) (.digest md)))))
 
 (defn blob-hash
   "The \"sha256:<hex>\" name of a blob."
   [^bytes data]
-  (sha256-ref blob-prefix data))
+  (object-hash :blob data))
 
 (defn edn-hash-bytes
   "The name of a structured object, given its canonical bytes."
   [^bytes canonical]
-  (sha256-ref edn-prefix canonical))
+  (object-hash :edn canonical))
 
 (defn edn-hash
   "The name of a structured object, given its value."
   [v]
   (edn-hash-bytes (edn/encode v)))
 
-(defn object-hash
-  "The name of an object of `kind`, :blob or :edn, from its payload: a
-  blob's bytes or a structured object's canonical bytes."
+(defn object-link
+  "The link to an object of `kind` with this payload."
   [kind ^bytes payload]
-  (case kind
-    :blob (blob-hash payload)
-    :edn (edn-hash-bytes payload)))
+  (edn/link (object-hash kind payload)))
 
-(defn blob-link [^bytes data] (edn/link (blob-hash data)))
+(defn blob-link [^bytes data] (object-link :blob data))
 
-(defn edn-link [v] (edn/link (edn-hash v)))
+(defn edn-link [v] (object-link :edn (edn/encode v)))
 
 ;; ---------------------------------------------------------- object files
+
+(defn object-path
+  "Where object `link` lives below a store's root, on disk or over HTTP:
+  objects/ab/cdef… for sha256:abcdef…."
+  [link]
+  (let [hex (edn/link-hex link)]
+    (str "objects/" (subs hex 0 2) "/" (subs hex 2))))
 
 (defn object-bytes
   "The full hash input of an object: its kind's prefix, then the payload.
   This is what an object file holds (docs/spec/store.md), so its SHA-256 is
   the object's name."
   ^bytes [kind ^bytes payload]
-  (let [^bytes prefix (case kind :blob blob-prefix :edn edn-prefix)]
-    (.array (doto (ByteBuffer/allocate (+ (alength prefix) (alength payload)))
-              (.put prefix)
+  (let [p (prefix kind)]
+    (.array (doto (ByteBuffer/allocate (+ (alength p) (alength payload)))
+              (.put p)
               (.put payload)))))
 
 (defn- starts-with? [^bytes data ^bytes prefix]
@@ -62,11 +84,11 @@
 
 (defn parse-object
   "Split the full hash input `data` into {:kind :bytes}, checking that it
-  hashes to `ref`; nil if it doesn't, or if it has no known prefix."
-  [ref ^bytes data]
-  (when-let [[kind ^bytes prefix] (cond (starts-with? data blob-prefix) [:blob blob-prefix]
-                                        (starts-with? data edn-prefix) [:edn edn-prefix])]
-    (let [payload (Arrays/copyOfRange data (alength prefix) (alength data))]
-      (when (= ref (object-hash kind payload))
-        {:kind kind :bytes payload}))))
-
+  hashes to `link`; nil if it doesn't, or if it has no known prefix."
+  [link ^bytes data]
+  (some (fn [[kind ^bytes p]]
+          (when (starts-with? data p)
+            (let [payload (Arrays/copyOfRange data (alength p) (alength data))]
+              (when (= (edn/link-ref link) (object-hash kind payload))
+                {:kind kind :bytes payload}))))
+        prefixes))

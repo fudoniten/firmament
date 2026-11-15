@@ -14,7 +14,8 @@
 
   Everything else, including nil, lists, sets, symbols and floats, is
   rejected."
-  (:require [clojure.string :as str])
+  (:require [clojure.string :as str]
+            [firmament.error :refer [fail]])
   (:import (java.nio ByteBuffer)
            (java.nio.charset CharacterCodingException CodingErrorAction
                              StandardCharsets)
@@ -24,9 +25,6 @@
 (set! *warn-on-reflection* true)
 
 (def max-depth 256)
-
-(defn- fail [kind msg data]
-  (throw (ex-info msg (assoc data ::error kind))))
 
 ;; ------------------------------------------------------------------ types
 
@@ -65,10 +63,15 @@
   [^Link l]
   (.-ref l))
 
+(defn link-hex
+  "The 64 hex digits of a link, without the \"sha256:\"."
+  ^String [^Link l]
+  (subs (.-ref l) (count "sha256:")))
+
 (defn link-digest
   "The 32 digest bytes a link names."
   ^bytes [^Link l]
-  (.parseHex (HexFormat/of) (subs (.-ref l) (count "sha256:"))))
+  (.parseHex (HexFormat/of) (link-hex l)))
 
 (deftype Bytes [^bytes data]
   Object
@@ -141,10 +144,12 @@
   (or (char-escapes c)
       (if (control? c) (format "\\u%04x" (int c)) c)))
 
-(defn- encode-string ^String [^String s]
+(defn- append-string! [^StringBuilder sb ^String s]
   (when (unpaired-surrogate? s)
     (fail :encode "string contains an unpaired surrogate" {:value s}))
-  (str \" (apply str (map escape-char (nfc s))) \"))
+  (.append sb \")
+  (doseq [c (nfc s)] (.append sb (escape-char c)))
+  (.append sb \"))
 
 (defn- compare-unsigned [^bytes a ^bytes b]
   (Arrays/compareUnsigned a b))
@@ -153,43 +158,69 @@
   (when (>= depth max-depth)
     (fail :encode (str "nesting deeper than " max-depth) {})))
 
-(declare encode-str)
-
-(defn- encode-map ^String [m depth]
-  (let [encode-child #(encode-str % (inc depth))
-        entries (->> m
-                     (map (fn [[k v]]
-                            (let [ek (encode-child k)]
-                              {:key-bytes (utf8 ek) :key ek :val (encode-child v)})))
-                     (sort-by :key-bytes compare-unsigned))]
-    (doseq [[a b] (partition 2 1 entries)
-            :when (zero? (compare-unsigned (:key-bytes a) (:key-bytes b)))]
-      (fail :encode (str "duplicate map key: " (:key a)) {}))
-    (str "{" (str/join " " (map #(str (:key %) " " (:val %)) entries)) "}")))
+(declare append-value!)
 
 (defn- encode-str
   "Canonical EDN text for `v`, nested `depth` levels deep."
   ^String [v depth]
+  (str (append-value! (StringBuilder.) v depth)))
+
+(defn- append-all!
+  "Append each of `xs` with `f`, separated by single spaces."
+  [^StringBuilder sb f xs]
+  (reduce (fn [first? x]
+            (when-not first? (.append sb \space))
+            (f x)
+            false)
+          true xs)
+  sb)
+
+(defn- append-map! [^StringBuilder sb m depth]
+  ;; Keys are encoded on their own, since entries sort by their bytes.
+  (let [entries (->> m
+                     (map (fn [[k v]]
+                            (let [ek (encode-str k (inc depth))]
+                              {:key-bytes (utf8 ek) :key ek :val v})))
+                     (sort-by :key-bytes compare-unsigned))]
+    (doseq [[a b] (partition 2 1 entries)
+            :when (zero? (compare-unsigned (:key-bytes a) (:key-bytes b)))]
+      (fail :encode (str "duplicate map key: " (:key a)) {}))
+    (.append sb \{)
+    (append-all! sb (fn [{:keys [^String key val]}]
+                      (.append sb key)
+                      (.append sb \space)
+                      (append-value! sb val (inc depth)))
+                 entries)
+    (.append sb \})))
+
+(defn- append-value!
+  "Append the canonical EDN text for `v`, nested `depth` levels deep, to
+  `sb`. Returns `sb`."
+  ^StringBuilder [^StringBuilder sb v depth]
   (cond
-    (boolean? v) (str v)
-    (int? v) (str (long v))
-    (string? v) (encode-string v)
+    (boolean? v) (.append sb (str v))
+    (int? v) (.append sb (long v))
+    (string? v) (append-string! sb v)
     (keyword? v) (if (valid-keyword? v)
-                   (str v)
+                   (.append sb (str v))
                    (fail :encode (str "invalid keyword: " v) {:value v}))
-    (instance? Link v) (str v)
-    (instance? Bytes v) (str v)
-    (bytes? v) (str (Bytes. v))
+    (instance? Link v) (.append sb (str v))
+    (instance? Bytes v) (.append sb (str v))
+    (bytes? v) (.append sb (str (Bytes. v)))
     (vector? v) (do (check-depth depth)
-                    (str "[" (str/join " " (map #(encode-str % (inc depth)) v)) "]"))
+                    (.append sb \[)
+                    (append-all! sb #(append-value! sb % (inc depth)) v)
+                    (.append sb \]))
     (and (map? v) (not (record? v))) (do (check-depth depth)
-                                         (encode-map v depth))
+                                         (append-map! sb v depth))
     :else (fail :encode (str "value not allowed in canonical EDN: " (pr-str v))
-                {:value v :class (some-> v class)})))
+                {:value v :class (some-> v class)}))
+  sb)
 
 (defn encode
   "Canonical EDN bytes for `v`. Strings are normalized to NFC. Throws
-  ex-info with ::error :encode for values canonical EDN can't hold."
+  ex-info with :firmament/error :encode for values canonical EDN can't
+  hold."
   ^bytes [v]
   (utf8 (encode-str v 0)))
 
@@ -218,60 +249,71 @@
 
 (declare parse-string)
 
+(defn- char-at [^String s j]
+  (when (< j (.length s)) (.charAt s (int j))))
+
+(defn- token
+  "The token starting at `j`, up to the next delimiter, and the index after
+  it."
+  [^String s j]
+  (let [n (.length s)]
+    (loop [k j]
+      (if (and (< k n) (not (delimiter? (.charAt s (int k)))))
+        (recur (inc k))
+        [(subs s j k) k]))))
+
+(defn- expect
+  "The index after `c`, which must be at `j`."
+  [s j c]
+  (if (= (char-at s j) c)
+    (inc j)
+    (pfail j (str "expected " (pr-str (str c))))))
+
 (defn- parse-value [^String s i depth]
   ;; Returns [value next-index].
-  (let [n (.length s)
-        char-at (fn [j] (when (< j n) (.charAt s j)))
-        token (fn [j]
-                (loop [k j]
-                  (if (and (< k n) (not (delimiter? (.charAt s k))))
-                    (recur (inc k))
-                    [(subs s j k) k])))
-        expect (fn [j c]
-                 (if (= (char-at j) c)
-                   (inc j)
-                   (pfail j (str "expected " (pr-str (str c))))))
-        c (char-at i)]
+  (let [c (char-at s i)]
     (cond
       (nil? c) (pfail i "unexpected end of input")
 
       (= c \[)
       (let [depth (inc depth)]
         (when (> depth max-depth) (pfail i (str "nesting deeper than " max-depth)))
-        (if (= (char-at (inc i)) \])
+        (if (= (char-at s (inc i)) \])
           [[] (+ i 2)]
           (loop [j (inc i) acc (transient [])]
             (let [[v j] (parse-value s j depth)
                   acc (conj! acc v)]
-              (if (= (char-at j) \])
+              (if (= (char-at s j) \])
                 [(persistent! acc) (inc j)]
-                (recur (expect j \space) acc))))))
+                (recur (expect s j \space) acc))))))
 
       (= c \{)
       (let [depth (inc depth)]
         (when (> depth max-depth) (pfail i (str "nesting deeper than " max-depth)))
-        (if (= (char-at (inc i)) \})
+        (if (= (char-at s (inc i)) \})
           [{} (+ i 2)]
           (loop [j (inc i) acc (transient {}) last-key nil]
             (let [[k j'] (parse-value s j depth)
-                  ek (encode k)]
+                  ;; The key's own text; if it isn't canonical, the final
+                  ;; check in `decode` rejects the input.
+                  ek (utf8 (subs s j j'))]
               (when (and last-key (<= (compare-unsigned ek last-key) 0))
                 (pfail j (if (zero? (compare-unsigned ek last-key))
                              "duplicate map key"
                              "map keys out of order")))
-              (let [[v j] (parse-value s (expect j' \space) depth)
+              (let [[v j] (parse-value s (expect s j' \space) depth)
                     acc (assoc! acc k v)]
-                (if (= (char-at j) \})
+                (if (= (char-at s j) \})
                   [(persistent! acc) (inc j)]
-                  (recur (expect j \space) acc ek)))))))
+                  (recur (expect s j \space) acc ek)))))))
 
       (= c \") (parse-string s i)
 
       (= c \#)
-      (let [[tag j] (token (inc i))]
+      (let [[tag j] (token s (inc i))]
         (when-not (#{"h" "b64"} tag) (pfail i (str "unknown tag #" tag)))
-        (let [j (expect j \space)
-              _ (when-not (= (char-at j) \") (pfail j "expected a string after the tag"))
+        (let [j (expect s j \space)
+              _ (when-not (= (char-at s j) \") (pfail j "expected a string after the tag"))
               [^String v j] (parse-string s j)]
           (if (= tag "h")
             (if (re-matches link-re v)
@@ -285,7 +327,7 @@
                 (pfail i "non-canonical base64"))))))
 
       (= c \:)
-      (let [[tok j] (token i)
+      (let [[tok j] (token s i)
             body (subs tok 1)
             slash (str/index-of body "/")
             k (cond
@@ -298,7 +340,7 @@
           (pfail i (str "invalid keyword " (pr-str tok)))))
 
       (or (= c \-) (Character/isDigit (char c)))
-      (let [[tok j] (token i)]
+      (let [[tok j] (token s i)]
         (when (or (not (re-matches int-re tok)) (= tok "-0"))
           (pfail i (str "invalid integer " (pr-str tok))))
         (let [v (try (Long/parseLong tok)
@@ -307,7 +349,7 @@
           [v j]))
 
       (or (= c \t) (= c \f))
-      (let [[tok j] (token i)]
+      (let [[tok j] (token s i)]
         (case tok
           "true" [true j]
           "false" [false j]
@@ -352,7 +394,7 @@
 
 (defn decode
   "Decode canonical EDN bytes, rejecting anything non-canonical. Throws
-  ex-info with ::error :decode on invalid input."
+  ex-info with :firmament/error :decode on invalid input."
   [^bytes data]
   (let [s (decode-utf8 data)
         [v i] (parse-value s 0 0)]

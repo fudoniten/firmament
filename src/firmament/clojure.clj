@@ -2,21 +2,20 @@
   "The Clojure layer (docs/spec/clojure.md): importing a deps.edn project
   into a :clj/manifest, :clj/analysis meta-objects, and projecting a
   manifest back out as a project directory."
-  (:require [clojure.edn]
-            [clojure.string :as str]
+  (:require [clojure.string :as str]
             [firmament.edn :as edn]
+            [firmament.error :as error]
+            [firmament.fs :as fs]
             [firmament.node :as node]
             [firmament.storage :as storage]
             [firmament.tree :as tree])
   (:import (java.io File PushbackReader StringReader)
            (java.nio.charset StandardCharsets)
-           (java.nio.file Files LinkOption OpenOption Path Paths)
-           (java.nio.file.attribute FileAttribute)))
+           (java.nio.file Path)))
 
 (set! *warn-on-reflection* true)
 
-(defn- fail [msg data]
-  (throw (ex-info msg (assoc data ::error :clojure))))
+(def ^:private fail (partial error/fail :clojure))
 
 ;; -------------------------------------------------------------- platforms
 
@@ -86,23 +85,34 @@
     (when (and (seq? form) (= 'ns (first form)) (symbol? (second form)))
       form)))
 
+(defn- alias-only?
+  "Whether libspec options `opts` only give an :as-alias, which names a
+  namespace without loading it."
+  [opts]
+  (let [ks (set (take-nth 2 opts))]
+    (and (contains? ks :as-alias) (empty? (disj ks :as-alias)))))
+
 (defn- libspec-names
-  "The namespaces one libspec of a :require or :use clause names."
+  "The namespaces one libspec of a :require or :use clause loads."
   [spec]
   (cond
     (symbol? spec) [(str spec)]
     (string? spec) [spec]
     (sequential? spec)
     (let [[head & more] spec]
-      (if (and (seq more) (not (keyword? (first more))))
+      (cond
         ;; A prefix list: (prefix lib1 [lib2 :as x] ...)
+        (and (seq more) (not (keyword? (first more))))
         (for [item more, lib (libspec-names item)] (str head "." lib))
-        (libspec-names head)))
+
+        (alias-only? more) []
+        :else (libspec-names head)))
     :else []))
 
 (defn ns-requires
   "The namespaces an `ns` form requires, sorted: everything named in its
-  :require, :use, :require-macros and :use-macros clauses."
+  :require, :use, :require-macros and :use-macros clauses, except those
+  given only an :as-alias, which Clojure doesn't load."
   [ns-form]
   (->> (drop 2 ns-form)
        (filter #(and (seq? %) (#{:require :use :require-macros :use-macros} (first %))))
@@ -117,7 +127,8 @@
 (def analyzer
   "Names the code that produces :clj/analysis objects. Bump :version when
   the analysis it gives for the same source changes."
-  {:type :clj/analyzer :name "firmament.clojure" :version 1})
+  ;; 2: libspecs with only :as-alias are no longer counted as requires.
+  {:type :clj/analyzer :name "firmament.clojure" :version 2})
 
 (def ^:private manifest-trees [:namespaces :analyses :resources :jars])
 
@@ -142,11 +153,6 @@
 
 ;; ----------------------------------------------------------------- import
 
-(def ^:private ^"[Ljava.nio.file.LinkOption;" follow (make-array LinkOption 0))
-
-(defn- ->path ^Path [p]
-  (if (instance? Path p) p (Paths/get (str p) (make-array String 0))))
-
 (defn- extension [^Path p]
   (let [n (str (.getFileName p))
         i (str/last-index-of n ".")]
@@ -155,18 +161,16 @@
 (defn- files-under
   "Every regular file below `dir`, as [path relative-names] pairs, sorted."
   [^Path dir]
-  (with-open [walk (Files/walk dir (make-array java.nio.file.FileVisitOption 0))]
-    (->> (iterator-seq (.iterator walk))
-         (filter #(Files/isRegularFile % follow))
-         (map (fn [^Path p] [p (mapv str (.relativize dir p))]))
-         (sort-by second)
-         vec)))
+  (->> (fs/walk dir)
+       (filter fs/regular-file?)
+       (map (fn [^Path p] [p (mapv str (.relativize dir p))]))
+       (sort-by second)
+       vec))
 
-(defn- read-deps [^Path dir]
-  (let [f (.resolve dir "deps.edn")]
-    (if (Files/exists f follow)
-      (clojure.edn/read-string (String. (Files/readAllBytes f) StandardCharsets/UTF_8))
-      {})))
+(defn read-deps
+  "The deps.edn map of the project in `dir`; {} if it has none."
+  [dir]
+  (fs/read-edn (fs/path dir "deps.edn") {} {}))
 
 (defn- source-file
   "Analyze one file: {:ns name :key source-key :requires {...}} if it is a
@@ -186,11 +190,11 @@
          :requires (into {} (map (fn [[pl form]] [pl (if form (ns-requires form) [])])) forms)}))))
 
 (defn- put-analysis! [s analyzer-link {:keys [ns requires]} source-link]
-  (edn/link (storage/put-value! s {:type :clj/analysis
-                                   :source source-link
-                                   :analyzer analyzer-link
-                                   :ns ns
-                                   :requires requires})))
+  (storage/put-value! s {:type :clj/analysis
+                         :source source-link
+                         :analyzer analyzer-link
+                         :ns ns
+                         :requires requires}))
 
 (defn- add-unique [m k v what]
   (when (contains? m k)
@@ -202,10 +206,10 @@
   `clojure -Spath` prints) and :local/root jar deps in deps.edn. Classpath
   directories must be the project's own paths."
   [^Path dir deps paths classpath]
-  (let [own (set (map #(.normalize (.toAbsolutePath (.resolve dir ^String %))) paths))
+  (let [own (set (map #(fs/absolute (fs/path dir %)) paths))
         from-cp (for [^String e (when classpath (str/split classpath (re-pattern File/pathSeparator)))
                       :when (seq e)
-                      :let [p (.normalize (.toAbsolutePath (.resolve dir e)))]]
+                      :let [p (fs/absolute (fs/path dir e))]]
                   (cond
                     (str/ends-with? e ".jar") p
                     (own p) nil
@@ -214,7 +218,7 @@
                                 {:entry e})))
         local (for [[_ {:keys [local/root]}] (:deps deps)
                     :when (and root (str/ends-with? root ".jar"))]
-                (.normalize (.toAbsolutePath (.resolve dir ^String root))))]
+                (fs/absolute (fs/path dir root)))]
     (distinct (remove nil? (concat from-cp local)))))
 
 (defn- add-source
@@ -233,14 +237,14 @@
   "Store one file found under the project's :paths, as a source or a
   resource."
   [s analyzer-link acc [^Path p names]]
-  (let [data (Files/readAllBytes p)
+  (let [data (fs/read-bytes p)
         link (storage/put-file! s data)]
     (if-let [src (source-file p data)]
       (add-source acc s analyzer-link src link p)
       (update acc :resources add-unique names {:link link} "resources at"))))
 
 (defn- add-jar [s jars ^Path p]
-  (let [link (storage/put-file! s (Files/readAllBytes p))
+  (let [link (storage/put-file! s (fs/read-bytes p))
         name (str (.getFileName p))]
     (if (= (get jars [name]) {:link link})
       jars
@@ -255,29 +259,29 @@
   `:classpath` (`clojure -Spath` output) and :local/root jar deps. `:main`
   names the namespace to run, recorded as the :clj/main tag."
   [s dir & {:keys [classpath main]}]
-  (let [dir (->path dir)
+  (let [dir (fs/path dir)
         deps (read-deps dir)
         paths (get deps :paths ["src"])
         _ (when-not (every? string? paths)
             (fail "only string :paths are supported" {:paths paths}))
-        analyzer-link (edn/link (storage/put-value! s analyzer))
+        analyzer-link (storage/put-value! s analyzer)
         {:keys [namespaces analyses resources]}
         (reduce (partial add-path-file s analyzer-link)
                 {:namespaces {} :analyses {} :resources {}}
                 (for [path paths
-                      :let [root (.resolve dir ^String path)]
-                      :when (Files/isDirectory root follow)
+                      :let [root (fs/path dir path)]
+                      :when (fs/directory? root)
                       file (files-under root)]
                   file))
         jars (reduce (partial add-jar s) {} (jar-paths dir deps paths classpath))]
     (when (and main (not (contains? namespaces (str/split (str main) #"\."))))
       (fail (str "no namespace " main " to run") {:main (str main)}))
-    (edn/link (storage/put-value! s (cond-> {:type :clj/manifest
-                                             :namespaces (tree/put-paths! s namespaces)
-                                             :analyses (tree/put-paths! s analyses)
-                                             :resources (tree/put-paths! s resources)
-                                             :jars (tree/put-paths! s jars)}
-                                      main (assoc :tags {:clj/main (str main)}))))))
+    (storage/put-value! s (cond-> {:type :clj/manifest
+                                   :namespaces (tree/put-paths! s namespaces)
+                                   :analyses (tree/put-paths! s analyses)
+                                   :resources (tree/put-paths! s resources)
+                                   :jars (tree/put-paths! s jars)}
+                            main (assoc :tags {:clj/main (str main)})))))
 
 (defn empty-manifest!
   "Store the empty program, a manifest whose trees are all empty, and return
@@ -285,11 +289,11 @@
   REPL that hasn't loaded anything from the store yet."
   [s]
   (let [empty (tree/put-paths! s {})]
-    (edn/link (storage/put-value! s {:type :clj/manifest
-                                     :namespaces empty
-                                     :analyses empty
-                                     :resources empty
-                                     :jars empty}))))
+    (storage/put-value! s {:type :clj/manifest
+                           :namespaces empty
+                           :analyses empty
+                           :resources empty
+                           :jars empty})))
 
 ;; ------------------------------------------------------------- namespaces
 
@@ -348,8 +352,8 @@
 ;; ------------------------------------------------------------- projection
 
 (defn- write-file! [r ^Path target link]
-  (Files/createDirectories (.getParent target) (make-array FileAttribute 0))
-  (with-open [out (Files/newOutputStream target (make-array OpenOption 0))]
+  (fs/mkdirs (.getParent target))
+  (with-open [out (fs/output-stream target)]
     (node/write-file! r link out)))
 
 (defn source-path
@@ -385,7 +389,6 @@
                           written))
                       written entry))
             {} (namespaces r (:namespaces m)))
-    (Files/write (.resolve dir "deps.edn")
-                 (.getBytes (projected-deps jar-names) StandardCharsets/UTF_8)
-                 ^"[Ljava.nio.file.OpenOption;" (make-array OpenOption 0))
+    (fs/write-bytes! (.resolve dir "deps.edn")
+                     (.getBytes (projected-deps jar-names) StandardCharsets/UTF_8))
     dir))

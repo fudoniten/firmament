@@ -35,19 +35,34 @@ object. The server:
 - refuses a body that doesn't hash to the name in the path (400), and one
   over 16 MiB (413). Files over 256 KiB are chunked, so real objects are far
   smaller;
+- refuses a structured object that links to an object the store doesn't
+  have (409), so the store keeps the children-before-parents rule
+  ([store.md](store.md#rules));
 - answers 204 once the object is stored. Storing an object it already has
   is a no-op.
 
 `firmament push STORE HASH` copies an object and everything it links to,
 children before parents, so a store never holds an object whose links are
-missing. It skips objects the store already has.
+missing. Because every store keeps that rule, push stops at any object the
+store already has: everything below it is there too, so pushing a changed
+program sends, and checks, only the objects on the changed paths.
 
 ## The server
 
 `firmament serve [--port N] [--bind ADDR]` serves the local store, by
 default on `127.0.0.1:8080`, and prints its URL. It accepts writes when
-`$FIRMAMENT_TOKEN` is set. It serves object files exactly as they are on
-disk and doesn't check them, because clients do.
+`$FIRMAMENT_TOKEN` is set. `firmament.http/serve!` serves any store, not
+only a local one: an in-memory store, or a cache in front of another
+server. It reads objects through the store, so a corrupt object file is a
+500 rather than bad bytes; clients still check everything, because a
+static file server checks nothing.
+
+**Reading needs no token, and that includes parameters.** Anyone who has
+a hash can fetch it and everything it links to. A hash is not a secret
+once it is in a log, a shell history or a deploy script, and a small or
+guessable value can be confirmed by hashing a guess. Don't put secrets in
+parameters (`run H P`) on a store others can reach; serve them only from a
+store bound to the node itself until encrypted parameters exist.
 
 ## Clients
 

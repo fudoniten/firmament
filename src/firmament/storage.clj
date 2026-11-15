@@ -1,58 +1,62 @@
 (ns firmament.storage
   "Protocols for reading and writing objects by hash, and the operations
-  every store gets from them. The local store (firmament.store) and the
-  in-memory store here are the implementations so far."
+  every store gets from them. The local store (firmament.store), the HTTP
+  store (firmament.http) and the in-memory store here are the
+  implementations so far.
+
+  Objects are named by links (firmament.edn/Link) throughout."
   (:require [firmament.chunk :as chunk]
             [firmament.edn :as edn]
+            [firmament.error :refer [fail]]
             [firmament.hash :as hash]))
 
 (set! *warn-on-reflection* true)
 
 (defprotocol Resolver
-  (fetch [r ref]
-    "The object named `ref` (a \"sha256:<hex>\" string) as
-    {:kind :blob|:edn, :bytes payload}, or nil when this resolver doesn't
-    have it. The payload is the raw bytes of a blob, or the canonical EDN of
-    a structured object. A resolver only returns objects whose hash it has
-    checked.")
-  (has? [r ref]
-    "Whether this resolver has the object named `ref`."))
+  (fetch [r link]
+    "The object `link` names as {:kind :blob|:edn, :bytes payload}, or nil
+    when this resolver doesn't have it. The payload is the raw bytes of a
+    blob, or the canonical EDN of a structured object. A resolver only
+    returns objects whose hash it has checked.")
+  (has? [r link]
+    "Whether this resolver has the object `link` names."))
 
 (defprotocol Store
   (put-object! [s kind payload]
     "Store `payload` as an object of `kind` (:blob or :edn, the payload
-    being canonical EDN) and return its \"sha256:<hex>\" name. The store
-    computes the name itself. Storing an object it already has is a
-    no-op."))
-
-(defn- fail [msg data]
-  (throw (ex-info msg (assoc data ::error :storage))))
+    being canonical EDN) and return the link to it. The store computes the
+    name itself. Storing an object it already has is a no-op."))
 
 ;; ----------------------------------------------------------------- reading
 
 (defn fetch!
   "Like fetch, but throws when the object is missing."
-  [r ref]
-  (or (fetch r ref) (fail (str "object not found: " ref) {:ref ref})))
+  [r link]
+  (or (fetch r link) (fail :storage (str "object not found: " (edn/link-ref link)) {:link link})))
 
 (defn fetch-value
-  "The decoded value of the structured object named `ref`."
-  [r ref]
-  (let [{:keys [kind bytes]} (fetch! r ref)]
+  "The decoded value of the structured object `link` names."
+  [r link]
+  (let [{:keys [kind bytes]} (fetch! r link)]
     (when-not (= :edn kind)
-      (fail (str "not a structured object: " ref) {:ref ref :kind kind}))
+      (fail :storage (str "not a structured object: " (edn/link-ref link)) {:link link :kind kind}))
     (edn/decode bytes)))
+
+(defn object-links
+  "The links in an object, as fetch returns it: none for a blob."
+  [{:keys [kind bytes]}]
+  (if (= :edn kind) (edn/links (edn/decode bytes)) #{}))
 
 ;; ----------------------------------------------------------------- writing
 
 (defn put-blob!
-  "Store `data` as a single blob. Returns its name."
+  "Store `data` as a single blob. Returns the link to it."
   [s ^bytes data]
   (put-object! s :blob data))
 
 (defn put-value!
-  "Store the canonical encoding of `v` as a structured object. Returns its
-  name."
+  "Store the canonical encoding of `v` as a structured object. Returns the
+  link to it."
   [s v]
   (put-object! s :edn (edn/encode v)))
 
@@ -63,25 +67,24 @@
   The whole file is held in memory for now."
   [s ^bytes data]
   (let [{:keys [root blobs index]} (chunk/store-file data)]
-    (doseq [b (vals blobs)] (put-blob! s b))
-    ;; Children before parents, so a store never holds a node whose children
-    ;; are missing, even after a crash part way through.
-    (doseq [canonical (sort-by (comp :level edn/decode) (vals (:objects index)))]
-      (put-object! s :edn canonical))
+    (run! #(put-blob! s %) (vals blobs))
+    ;; Index nodes come lowest level first, so a store never holds a node
+    ;; whose children are missing, even after a crash part way through.
+    (run! (fn [[_ canonical]] (put-object! s :edn canonical)) (:objects index))
     root))
 
 ;; ------------------------------------------------------------ memory store
 
 (defrecord MemoryStore [objects]
   Resolver
-  (fetch [_ ref] (some-> (get @objects ref) (update :bytes #(aclone ^bytes %))))
-  (has? [_ ref] (contains? @objects ref))
+  (fetch [_ link] (some-> (get @objects link) (update :bytes #(aclone ^bytes %))))
+  (has? [_ link] (contains? @objects link))
 
   Store
   (put-object! [_ kind payload]
-    (let [ref (hash/object-hash kind payload)]
-      (swap! objects assoc ref {:kind kind :bytes (aclone ^bytes payload)})
-      ref)))
+    (let [link (hash/object-link kind payload)]
+      (swap! objects assoc link {:kind kind :bytes (aclone ^bytes payload)})
+      link)))
 
 (defn memory-store
   "An empty store that keeps objects in memory, for tests and scratch work."
@@ -92,15 +95,16 @@
 
 (defrecord Cache [local remote]
   Resolver
-  (fetch [_ ref]
-    (or (fetch local ref)
-        (when-let [{:keys [kind bytes] :as object} (fetch remote ref)]
-          (let [got (hash/object-hash kind bytes)]
-            (when-not (= ref got)
-              (fail (str "asked for " ref " but got " got) {:ref ref :got got})))
+  (fetch [_ link]
+    (or (fetch local link)
+        (when-let [{:keys [kind bytes] :as object} (fetch remote link)]
+          (let [got (hash/object-link kind bytes)]
+            (when-not (= link got)
+              (fail :storage (str "asked for " (edn/link-ref link) " but got " (edn/link-ref got))
+                    {:link link :got got})))
           (put-object! local kind bytes)
           object)))
-  (has? [_ ref] (or (has? local ref) (has? remote ref)))
+  (has? [_ link] (or (has? local link) (has? remote link)))
 
   Store
   (put-object! [_ kind payload] (put-object! local kind payload)))
@@ -112,36 +116,67 @@
   [local remote]
   (->Cache local remote))
 
+;; ------------------------------------------------------------------ graphs
+
+(defn reduce-graph
+  "Reduce `f` over every node reachable from `roots`, each once, children
+  before parents. `children` gives a node's children; returning nil stops
+  the walk below that node, though the node itself is still visited. Uses
+  an explicit stack, so deep graphs are fine."
+  [children f init roots]
+  ;; Each frame is [node remaining-children]; a node goes to `f` once all
+  ;; of its children have.
+  (loop [stack (list) todo (seq roots) seen #{} acc init]
+    (cond
+      (seq stack)
+      (let [[node kids] (peek stack)]
+        (if-let [[k & more] kids]
+          (let [stack (conj (pop stack) [node more])]
+            (if (seen k)
+              (recur stack todo seen acc)
+              (recur (conj stack [k (seq (children k))]) todo (conj seen k) acc)))
+          (recur (pop stack) todo seen (f acc node))))
+
+      todo
+      (let [[r & more] todo]
+        (if (seen r)
+          (recur stack more seen acc)
+          (recur (conj stack [r (seq (children r))]) more (conj seen r) acc)))
+
+      :else acc)))
+
+(defn walk
+  "Every node reachable from `roots`, each once, children before parents,
+  as a vector. See reduce-graph."
+  [children roots]
+  (persistent! (reduce-graph children conj! (transient []) roots)))
+
 (defn fetch-all!
-  "Fetch the object named `ref` and everything it links to, recursively,
+  "Fetch the object `link` names and everything it links to, recursively,
   each object once. Through a `cache`, this copies the whole graph into the
-  local store. Returns the set of names fetched."
-  [r ref]
-  (loop [todo (list ref) seen #{}]
-    (if-let [ref (first todo)]
-      (if (seen ref)
-        (recur (rest todo) seen)
-        (let [{:keys [kind bytes]} (fetch! r ref)
-              children (when (= :edn kind) (map edn/link-ref (edn/links (edn/decode bytes))))]
-          (recur (into (rest todo) children) (conj seen ref))))
-      seen)))
+  local store. Returns the set of links fetched."
+  [r link]
+  (set (walk #(object-links (fetch! r %)) [link])))
 
 (defn copy!
-  "Copy object `ref` and everything it links to from `from` into `to`,
+  "Copy object `link` and everything it links to from `from` into `to`,
   children before parents, so `to` never holds an object whose links are
-  missing. Objects `to` already has aren't sent again, but their links are
-  still checked. Returns the number of objects copied."
-  [from to ref]
-  (let [seen (volatile! #{})
-        copied (volatile! 0)]
-    (letfn [(visit [ref]
-              (when-not (@seen ref)
-                (vswap! seen conj ref)
-                (let [{:keys [kind bytes]} (fetch! from ref)]
-                  (when (= :edn kind)
-                    (run! visit (map edn/link-ref (edn/links (edn/decode bytes)))))
-                  (when-not (has? to ref)
-                    (put-object! to kind bytes)
-                    (vswap! copied inc)))))]
-      (visit ref)
-      @copied)))
+  missing. Below an object `to` already has, nothing is checked or sent:
+  every store keeps that same rule, so `to` has its whole graph too.
+  Returns the number of objects copied."
+  [from to link]
+  ;; Objects are held from when they're fetched until they're written, so
+  ;; only the ones on the walk's current path are in memory.
+  (let [pending (volatile! {})]
+    (reduce-graph (fn [l]
+                    (when-not (has? to l)
+                      (let [o (fetch! from l)]
+                        (vswap! pending assoc l o)
+                        (object-links o))))
+                  (fn [n l]
+                    (if-let [{:keys [kind bytes]} (@pending l)]
+                      (do (put-object! to kind bytes)
+                          (vswap! pending dissoc l)
+                          (inc n))
+                      n))
+                  0 [link])))

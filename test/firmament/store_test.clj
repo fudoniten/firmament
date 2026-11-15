@@ -21,29 +21,29 @@
 (defn- utf8 ^bytes [^String s] (.getBytes s StandardCharsets/UTF_8))
 
 (defn- object-file ^Path [s ref]
-  (let [h (subs ref (count "sha256:"))]
+  (let [h (edn/link-hex ref)]
     (.resolve ^Path (:root s) (str "objects/" (subs h 0 2) "/" (subs h 2)))))
 
 (deftest blobs
   (let [s (store/open (temp-dir))
         ref (storage/put-blob! s (utf8 "hello\n"))]
-    (is (= "sha256:1be8615f7fbda85e1ef029f02573bdfefe09fb01af39e6ce684104a45a360ae8" ref))
+    (is (= (edn/link "sha256:1be8615f7fbda85e1ef029f02573bdfefe09fb01af39e6ce684104a45a360ae8") ref))
     (is (storage/has? s ref))
     (let [{:keys [kind bytes]} (storage/fetch s ref)]
       (is (= :blob kind))
       (is (= "68656c6c6f0a" (hex bytes))))
     (testing "the object file is the hash input, so sha256sum of it is the hash"
       (let [data (Files/readAllBytes (object-file s ref))]
-        (is (= (str "sha256:" (hex (.digest (MessageDigest/getInstance "SHA-256") data))) ref))
+        (is (= (str "sha256:" (hex (.digest (MessageDigest/getInstance "SHA-256") data))) (edn/link-ref ref)))
         (is (= "blob\nhello\n" (String. data StandardCharsets/UTF_8)))))
     (testing "putting again is a no-op"
       (is (= ref (storage/put-blob! s (utf8 "hello\n")))))))
 
 (deftest values
   (let [s (store/open (temp-dir))
-        v {:type :note :text "hi" :see (edn/link (hash/blob-hash (byte-array 0)))}
+        v {:type :note :text "hi" :see (hash/blob-link (byte-array 0))}
         ref (storage/put-value! s v)]
-    (is (= (hash/edn-hash v) ref))
+    (is (= (hash/edn-link v) ref))
     (is (= :edn (:kind (storage/fetch s ref))))
     (is (= v (storage/fetch-value s ref)))
     (is (thrown? clojure.lang.ExceptionInfo
@@ -51,7 +51,7 @@
 
 (deftest missing
   (let [s (store/open (temp-dir))
-        ref (hash/blob-hash (utf8 "absent"))]
+        ref (hash/blob-link (utf8 "absent"))]
     (is (not (storage/has? s ref)))
     (is (nil? (storage/fetch s ref)))
     (is (thrown? clojure.lang.ExceptionInfo (storage/fetch! s ref)))))
@@ -66,10 +66,10 @@
     (testing "a large file is chunked, and reads back byte for byte"
       (let [^bytes data (gen/sha256-ctr "store-test" 0 (* 3 1024 1024))
             root (storage/put-file! s data)
-            node (storage/fetch-value s (edn/link-ref root))]
+            node (storage/fetch-value s root)]
         (is (= :chunked (:type node)))
         (is (= (alength data) (:size node)))
-        (is (every? #(storage/has? s (edn/link-ref %)) (edn/links node)))
+        (is (every? #(storage/has? s %) (edn/links node)))
         (is (Arrays/equals data ^bytes (node/read-file s root)))))))
 
 (deftest corruption-is-detected
@@ -83,22 +83,22 @@
   (let [s (store/open (temp-dir))
         blob (storage/put-blob! s (utf8 "abc"))
         node (storage/put-value! s {:type :chunked :level 0 :size 4
-                                  :chunks [{:link (edn/link blob) :size 4}]})]
+                                    :chunks [{:link blob :size 4}]})]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"size mismatch"
-                          (node/read-file s (edn/link node))))))
+                          (node/read-file s node)))))
 
 (deftest metadata
   (let [s (store/open (temp-dir))
         ref (storage/put-blob! s (utf8 "kept"))]
     (is (= {} (store/object-meta s ref)))
     (is (= {:pinned? true} (store/update-meta! s ref assoc :pinned? true)))
-    (store/update-meta! s ref assoc :source (edn/link ref) :expires #inst "2030-01-01")
-    (is (= {:pinned? true :source (edn/link ref) :expires #inst "2030-01-01"}
+    (store/update-meta! s ref assoc :source ref :expires #inst "2030-01-01")
+    (is (= {:pinned? true :source ref :expires #inst "2030-01-01"}
            (store/object-meta (store/open (:root s)) ref)))
     (testing "metadata never changes the object"
-      (is (= ref (hash/blob-hash (:bytes (storage/fetch s ref))))))
+      (is (= ref (hash/blob-link (:bytes (storage/fetch s ref))))))
     (is (thrown? clojure.lang.ExceptionInfo
-                 (store/update-meta! s (hash/blob-hash (utf8 "absent")) assoc :pinned? true)))))
+                 (store/update-meta! s (hash/blob-link (utf8 "absent")) assoc :pinned? true)))))
 
 (deftest opening
   (let [dir (temp-dir)]

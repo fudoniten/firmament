@@ -89,7 +89,7 @@
       (is (= (hash/blob-link (utf8 "(ns my.app.core)\n"))
              (:link (tree/lookup s root ["src" "my" "app" "core.clj"]))))
       (is (= :chunked (:type (storage/fetch-value
-                              s (edn/link-ref (:link (tree/lookup s root ["resources" "data.bin"]))))))))
+                              s (:link (tree/lookup s root ["resources" "data.bin"])))))))
     (testing "import, export and import again gives the same hash"
       (let [out (.resolve (temp-dir) "out")]
         (tree/export! s root out)

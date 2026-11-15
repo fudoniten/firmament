@@ -175,3 +175,27 @@ PLAN.md).
 **No dependencies.** The client is `java.net.http` and the server is the
 JDK's `com.sun.net.httpserver`.
 
+
+## 2026-11-15 — Review cleanups
+
+**Links everywhere above `firmament.hash`.** Store protocols take and
+return links rather than `"sha256:…"` strings. The text form is used only
+by `firmament.hash` (the spec's own form, which the vectors use) and at the
+edges: file paths, URLs, and what the CLI prints.
+
+**Every store keeps children before parents, and copies rely on it.**
+`storage/copy!` stops at an object the target already has, since
+everything below it must be there too. The HTTP server enforces the rule by
+refusing a PUT that links to objects it doesn't have (409). This makes
+pushing a changed program cost the changed paths, not the whole program.
+
+**The server reads through the store.** It now serves any store
+(`storage/Resolver`), so it checks what it serves as a side effect. Clients
+still check everything, because a static file server is a remote too.
+
+**`:as-alias` is not a require.** Analyzer version 2 leaves out libspecs
+whose only option is `:as-alias`, since Clojure doesn't load them.
+
+**Host mismatches are warnings for now.** The host's Clojure always wins
+over the manifest's Clojure jar. `run` warns when their versions differ;
+pinning the host in the manifest waits for a format decision.

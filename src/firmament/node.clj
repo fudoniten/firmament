@@ -9,13 +9,13 @@
   higher layers their own types."
   (:refer-clojure :exclude [load])
   (:require [firmament.edn :as edn]
+            [firmament.error :as error]
             [firmament.storage :as storage])
   (:import (java.io ByteArrayOutputStream OutputStream)))
 
 (set! *warn-on-reflection* true)
 
-(defn- fail [msg data]
-  (throw (ex-info msg (assoc data ::error :node))))
+(def ^:private fail (partial error/fail :node))
 
 (defn node-type
   "The type a node's methods dispatch on: :blob for a blob, the :type of a
@@ -57,7 +57,7 @@
 (defn load
   "The node at `link`, validated."
   [r link]
-  (let [{:keys [kind bytes]} (storage/fetch! r (edn/link-ref link))]
+  (let [{:keys [kind bytes]} (storage/fetch! r link)]
     (validate (if (= :blob kind) bytes (edn/decode bytes)))))
 
 (defn load-as
