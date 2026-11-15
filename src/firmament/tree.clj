@@ -3,16 +3,16 @@
   up, path-copying updates, and moving directories in and out of the store."
   (:require [clojure.string :as str]
             [firmament.edn :as edn]
+            [firmament.error :as error]
+            [firmament.fs :as fs]
             [firmament.node :as node]
             [firmament.storage :as storage])
-  (:import (java.nio.file Files LinkOption OpenOption Path Paths)
-           (java.nio.file.attribute FileAttribute)
+  (:import (java.nio.file Path)
            (java.text Normalizer Normalizer$Form)))
 
 (set! *warn-on-reflection* true)
 
-(defn- fail [msg data]
-  (throw (ex-info msg (assoc data ::error :tree))))
+(def ^:private fail (partial error/fail :tree))
 
 ;; ------------------------------------------------------------ validation
 
@@ -64,17 +64,14 @@
   [r link]
   (node/load-as r link :tree))
 
-(defn- step-node [t name]
-  (let [entry (get-in t [:entries name])]
-    (when-not (:children entry)
-      (fail (str "no subtree " (pr-str name)) {:name name}))
-    entry))
-
-(defn- step [r link name]
-  (let [entry (get-in (get-tree r link) [:entries name])]
-    (when-not entry
-      (fail (str "no entry " (pr-str name)) {:name name}))
-    entry))
+(defn- children-of
+  "The :children link of entry `name` in tree `t` (a value). Throws if
+  there is no such entry or it has no :children."
+  [t name]
+  (let [entry (or (get-in t [:entries name])
+                  (fail (str "no entry " (pr-str name)) {:name name}))]
+    (or (:children entry)
+        (fail (str (pr-str name) " has no :children") {:name name}))))
 
 (defn lookup
   "The entry at `path` (a sequence of names) below the tree at `root`, or nil
@@ -94,10 +91,7 @@
   "The link to the tree at `path` below `root`; `root` itself for an empty
   path. Throws if a name on the path is missing or has no :children."
   [r root path]
-  (reduce (fn [link name]
-            (or (:children (step r link name))
-                (fail (str (pr-str name) " has no :children") {:name name})))
-          root path))
+  (reduce #(children-of (get-tree r %1) %2) root path))
 
 ;; -------------------------------------------------------------- updating
 
@@ -120,7 +114,7 @@
         entries (if new
                   (assoc (:entries t) name new)
                   (dissoc (:entries t) name))]
-    (edn/link (storage/put-value! s (tree entries)))))
+    (storage/put-value! s (tree entries))))
 
 (defn assoc-entry!
   "Set the entry at `path` to `entry`. Returns the new root link."
@@ -148,16 +142,9 @@
                         (seq below) (assoc :children (put-paths! s below)))])))
        (into {})
        tree
-       (storage/put-value! s)
-       edn/link))
+       (storage/put-value! s)))
 
 ;; ------------------------------------------------------ directories in/out
-
-(def ^:private ^"[Ljava.nio.file.LinkOption;" no-follow
-  (into-array LinkOption [LinkOption/NOFOLLOW_LINKS]))
-
-(defn- ->path ^Path [p]
-  (if (instance? Path p) p (Paths/get (str p) (make-array String 0))))
 
 (defn- file-name ^String [^Path p] (str (.getFileName p)))
 
@@ -167,12 +154,12 @@
   "The tree entry for the file or directory at `p`, storing its contents."
   [s ^Path p]
   (cond
-    (Files/isSymbolicLink p)
+    (fs/symbolic-link? p)
     (fail (str "symbolic links are not supported: " p) {:path (str p)})
 
-    (Files/isDirectory p no-follow) {:children (import-dir! s p)}
+    (fs/directory? p) {:children (import-dir! s p)}
 
-    (Files/isRegularFile p no-follow) {:link (storage/put-file! s (Files/readAllBytes p))}
+    (fs/regular-file? p :follow? false) {:link (storage/put-file! s (fs/read-bytes p))}
 
     :else (fail (str "not a regular file or directory: " p) {:path (str p)})))
 
@@ -182,30 +169,24 @@
   normalized to NFC. Symbolic links and special files are refused. Returns
   the link to the tree."
   [s dir]
-  (let [dir (->path dir)]
-    (when-not (Files/isDirectory dir no-follow)
+  (let [dir (fs/path dir)]
+    (when-not (fs/directory? dir)
       (fail (str "not a directory: " dir) {:path (str dir)}))
-    (let [children (with-open [ls (Files/list dir)] (vec (iterator-seq (.iterator ls))))
-          entries (reduce
+    (let [entries (reduce
                    (fn [entries p]
                      (let [name (Normalizer/normalize (file-name p) Normalizer$Form/NFC)]
                        (when (contains? entries name)
                          (fail (str "two names in " dir " are the same after NFC: " (pr-str name))
                                {:path (str dir) :name name}))
                        (assoc entries name (path-entry s p))))
-                   {} children)]
-      (edn/link (storage/put-value! s (tree entries))))))
+                   {} (fs/list dir))]
+      (storage/put-value! s (tree entries)))))
 
 (defn empty-dir!
   "Create directory `dir`, which must not exist or be empty. Returns its
   Path."
   ^Path [dir]
-  (let [dir (->path dir)]
-    (when (and (Files/exists dir no-follow)
-               (or (not (Files/isDirectory dir no-follow))
-                   (with-open [ls (Files/list dir)] (.isPresent (.findAny ls)))))
-      (fail (str dir " exists and is not an empty directory") {:path (str dir)}))
-    (Files/createDirectories dir (make-array FileAttribute 0))))
+  (fs/ensure-empty-dir! dir :tree))
 
 (defn export!
   "Write the tree at `link` out as directory `dir`, which must not exist or
@@ -222,7 +203,7 @@
             link-keys (set (keys (dissoc entry :tags)))]
         (case link-keys
           #{:children} (export! r (:children entry) target)
-          #{:link} (with-open [out (Files/newOutputStream target (make-array OpenOption 0))]
+          #{:link} (with-open [out (fs/output-stream target)]
                      (node/write-file! r (:link entry) out))
           (fail (str "entry " (pr-str name) " has links " (vec (sort link-keys))
                      "; only :link or :children can be written to a directory")
@@ -235,8 +216,8 @@
   (sort-by key (:entries (get-tree r (resolve-path r root path)))))
 
 (defmethod node/listing :tree [r t path]
-  (let [t (if (seq path)
-            (get-tree r (resolve-path r (:children (step-node t (first path))) (rest path)))
+  (let [t (if-let [[name & more] (seq path)]
+            (get-tree r (resolve-path r (children-of t name) more))
             t)]
     (for [[name entry] (sort-by key (:entries t))
           [k link] (sort-by key (dissoc entry :tags))]

@@ -98,24 +98,24 @@
 
     :root     link to the root :chunked node
     :levels   per level, the number of entries in each node
-    :objects  {ref canonical-bytes} for every index node"
+    :objects  [link canonical-bytes] for every index node, lowest level
+              first, so children always come before their parents"
   [entries]
   (when (empty? entries)
     (throw (ex-info "a chunk index needs at least one entry" {})))
-  (loop [level 0 entries entries levels [] objects {}]
+  (loop [level 0 entries entries levels [] objects []]
     (let [groups (group-entries entries)
-          nodes (map (fn [g]
-                       (let [canonical (edn/encode (chunked-node level g))
-                             ref (hash/edn-hash-bytes canonical)]
-                         {:ref ref
-                          :canonical canonical
-                          :entry [(edn/link ref) (reduce + (map second g))]}))
-                     groups)
+          nodes (mapv (fn [g]
+                        (let [canonical (edn/encode (chunked-node level g))]
+                          {:link (hash/object-link :edn canonical)
+                           :canonical canonical
+                           :size (reduce + (map second g))}))
+                      groups)
           levels (conj levels (mapv count groups))
-          objects (into objects (map (juxt :ref :canonical)) nodes)]
-      (if (= 1 (count groups))
-        {:root (first (:entry (first nodes))) :levels levels :objects objects}
-        (recur (inc level) (mapv :entry nodes) levels objects)))))
+          objects (into objects (map (juxt :link :canonical)) nodes)]
+      (if (= 1 (count nodes))
+        {:root (:link (first nodes)) :levels levels :objects objects}
+        (recur (inc level) (mapv (juxt :link :size) nodes) levels objects)))))
 
 (defn store-file
   "Turn file bytes into a single blob or a chunked file. Returns
@@ -124,19 +124,18 @@
     :chunked?  whether it was chunked
     :cuts      chunk end offsets (empty for a single blob)
     :index     the build-index result, when chunked
-    :blobs     {ref bytes} for the file's blobs"
+    :blobs     {link bytes} for the file's blobs"
   [^bytes data]
   (if (<= (alength data) max-size)
-    (let [ref (hash/blob-hash data)]
-      {:root (edn/link ref) :chunked? false :cuts [] :blobs {ref data}})
+    (let [link (hash/blob-link data)]
+      {:root link :chunked? false :cuts [] :blobs {link data}})
     (let [cuts (cut-points data)
           chunks (map (fn [start end] (Arrays/copyOfRange data (int start) (int end)))
                       (cons 0 cuts) cuts)
-          refs (mapv hash/blob-hash chunks)
-          index (build-index (mapv (fn [ref ^bytes c] [(edn/link ref) (alength c)])
-                                   refs chunks))]
+          links (mapv hash/blob-link chunks)
+          index (build-index (mapv (fn [link ^bytes c] [link (alength c)]) links chunks))]
       {:root (:root index)
        :chunked? true
        :cuts cuts
        :index index
-       :blobs (zipmap refs chunks)})))
+       :blobs (zipmap links chunks)})))

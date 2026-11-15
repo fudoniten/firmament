@@ -42,9 +42,13 @@ object the file is.
   place. A reader never sees a partial object.
 - **Objects are checked on every read.** A file whose SHA-256 is not its name
   is reported as corrupt rather than returned.
-- **Children before parents.** When a file is stored, its chunks are written
-  before the index nodes that link to them, and lower index levels before
-  higher ones.
+- **Children before parents.** A store never holds an object whose links
+  are missing. When a file is stored, its chunks are written before the
+  index nodes that link to them, and lower index levels before higher ones;
+  `push` and other copies write each object after everything it links to,
+  and the HTTP server refuses a PUT whose links it doesn't have. So having
+  an object means having everything below it, which lets a copy stop
+  there.
 
 ## Metadata
 

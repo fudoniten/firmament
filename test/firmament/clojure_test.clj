@@ -36,7 +36,10 @@
          (clj/ns-requires '(ns x "doc" {:author "me"}
                              (:require a [b c [d :as dd]] (b.c) :reload ["react" :as r])
                              (:use [e :only [f]])
-                             (:import (java.util UUID)))))))
+                             (:import (java.util UUID))))))
+  (testing ":as-alias names a namespace without loading it"
+    (is (= ["a" "c"]
+           (clj/ns-requires '(ns x (:require a [b :as-alias bb] [c :as cc :as-alias c2])))))))
 
 (deftest source-paths
   (is (= "my/app_server.clj" (clj/source-path "my.app-server" "clj")))
@@ -119,7 +122,7 @@
 (deftest code-hash-ignores-the-analyzer
   (let [s (storage/memory-store)
         v1 (clj/manifest s (import! s))
-        v2 (with-redefs [clj/analyzer (assoc clj/analyzer :version 2)]
+        v2 (with-redefs [clj/analyzer (update clj/analyzer :version inc)]
              (clj/manifest s (import! s)))]
     (is (= (:namespaces v1) (:namespaces v2)) "the code's hash doesn't change")
     (is (not= (:analyses v1) (:analyses v2)) "the analyses do")))
@@ -127,7 +130,7 @@
 (deftest sources-and-analyses-must-match
   (let [s (storage/memory-store)
         m (clj/manifest s (import! s))
-        empty-link (edn/link (storage/put-value! s tree/empty-tree))]
+        empty-link (storage/put-value! s tree/empty-tree)]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"has sources"
                           (clj/namespace-entries s (assoc m :analyses empty-link))))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"analyses without sources"
@@ -139,8 +142,8 @@
           m (clj/manifest s (clj/import-project! s "."))
           nss (into {} (clj/namespace-entries s m))]
       (is (contains? nss "firmament.clojure"))
-      (is (= ["clojure.edn" "clojure.string" "firmament.edn" "firmament.node"
-              "firmament.storage" "firmament.tree"]
+      (is (= ["clojure.string" "firmament.edn" "firmament.error" "firmament.fs"
+              "firmament.node" "firmament.storage" "firmament.tree"]
              (:clj (:requires (node/load s (:analysis/clj (nss "firmament.clojure"))))))))))
 
 (deftest refusals

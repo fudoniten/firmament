@@ -73,10 +73,10 @@
 (deftest root-node-reassembles-the-file
   (let [data (gen/sha256-ctr "root" 0 mib)
         f (chunk/store-file data)
-        node (edn/decode (get-in f [:index :objects (edn/link-ref (:root f))]))]
+        node (edn/decode (get (into {} (get-in f [:index :objects])) (:root f)))]
     (is (= {:type :chunked :level 0 :size mib} (dissoc node :chunks)))
     (is (= (hex data)
-           (apply str (map #(hex (get (:blobs f) (edn/link-ref (:link %)))) (:chunks node)))))))
+           (apply str (map #(hex (get (:blobs f) (:link %))) (:chunks node)))))))
 
 (deftest index-cap
   (let [entries (->> (index-entries "cap" 6000)

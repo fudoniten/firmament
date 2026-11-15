@@ -2,6 +2,7 @@
   (:require [clojure.test :refer [deftest is testing]]
             [firmament.clojure :as clj]
             [firmament.edn :as edn]
+            [firmament.hash :as hash]
             [firmament.http :as http]
             [firmament.loader :as loader]
             [firmament.runner :as runner]
@@ -69,19 +70,36 @@
             (require 'app.core :reload-all)
             (is (= "HELLO, STORE!" ((resolve 'app.core/hello))))))))))
 
+(defn- static-server
+  "A plain file server for directory `dir`, which checks nothing."
+  ^HttpServer [dir]
+  (doto (SimpleFileServer/createFileServer (InetSocketAddress. "127.0.0.1" 0)
+                                           (.toAbsolutePath ^java.nio.file.Path dir)
+                                           SimpleFileServer$OutputLevel/NONE)
+    (.start)))
+
 (deftest tampering-is-detected
-  (let [a (store/open (temp-dir))
+  (let [dir (temp-dir)
+        a (store/open dir)
         root (clj/import-project! a app :main 'app.core)
         m (clj/manifest a root)
         source (second (clj/jvm-source (get (into {} (clj/namespace-entries a m)) "app.text-util")))
-        f (store/object-file a (edn/link-ref source))]
+        f (store/object-file a source)]
     (Files/write f (.getBytes "blob\n(ns app.text-util) (defn shout [s] :pwned)" StandardCharsets/UTF_8)
                  ^"[Ljava.nio.file.OpenOption;" (make-array OpenOption 0))
-    (with-server [url a]
-      (let [b (storage/cache (storage/memory-store) (http/http-store url))]
-        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"doesn't match its hash"
-                              (runner/prefetch! b root)))
-        (is (not (storage/has? (:local b) (edn/link-ref source))))))))
+    (testing "a client checks what any server sends"
+      (let [server (static-server dir)]
+        (try
+          (let [b (storage/cache (storage/memory-store)
+                                 (http/http-store (str "http://127.0.0.1:" (.getPort (.getAddress server)))))]
+            (is (thrown-with-msg? clojure.lang.ExceptionInfo #"doesn't match its hash"
+                                  (runner/prefetch! b root)))
+            (is (not (storage/has? (:local b) source))))
+          (finally (.stop server 0)))))
+    (testing "and firmament's own server won't serve a corrupt object"
+      (with-server [url a]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"HTTP 500"
+                              (storage/fetch (http/http-store url) source)))))))
 
 (deftest pushing
   (let [a (store/open (temp-dir))
@@ -94,13 +112,19 @@
       (testing "a wrong token is refused"
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"HTTP 403"
                               (storage/put-blob! (http/http-store url :token "guess") (.getBytes "x")))))
+      (testing "an object whose links the server doesn't have is refused"
+        (let [m (storage/memory-store)
+              child (storage/put-blob! m (.getBytes "child"))
+              parent (storage/put-value! m {:child child})]
+          (is (= 409 (put-raw url (http/object-path parent)
+                              (hash/object-bytes :edn (:bytes (storage/fetch m parent))) "secret")))))
       (testing "a body that doesn't match its path is refused"
         (let [ref (storage/put-blob! (storage/memory-store) (.getBytes "real"))]
           (is (= 400 (put-raw url (http/object-path ref) (.getBytes "blob\nfake") "secret")))))
       (let [remote (http/http-store url :token "secret")
-            n (storage/copy! a remote (edn/link-ref root))]
+            n (storage/copy! a remote root)]
         (is (pos? n))
-        (is (zero? (storage/copy! a remote (edn/link-ref root))) "pushing again sends nothing")
+        (is (zero? (storage/copy! a remote root)) "pushing again sends nothing")
         (testing "the pushed program runs from the server"
           (let [b (storage/cache (storage/memory-store) (http/http-store url))]
             (is (= ["app.core" "app.platform" "app.text-util"] (runner/prefetch! b root)))))))))

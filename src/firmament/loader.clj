@@ -5,14 +5,15 @@
   (:require [clojure.string :as str]
             [firmament.clojure :as clj]
             [firmament.edn :as edn]
+            [firmament.error :as error]
+            [firmament.fs :as fs]
             [firmament.node :as node]
             [firmament.tree :as tree])
   (:import (clojure.lang Compiler LineNumberingPushbackReader)
            (java.io ByteArrayInputStream InputStreamReader)
            (java.net URL URLClassLoader URLConnection URLStreamHandler)
            (java.nio.charset StandardCharsets)
-           (java.nio.file CopyOption Files OpenOption Path Paths StandardCopyOption)
-           (java.nio.file.attribute FileAttribute)
+           (java.nio.file Path)
            (java.util Collections)))
 
 (set! *warn-on-reflection* true)
@@ -22,22 +23,27 @@
   `with-root`; nil outside."
   nil)
 
-(defn- fail [msg data]
-  (throw (ex-info msg (assoc data ::error :loader))))
+(def ^:private fail (partial error/fail :loader))
 
 ;; ------------------------------------------------------------------ URLs
 
-(defn- file-url
-  "A firmament: URL whose stream is the file at `link`, read from `r` when
-  opened. `path` is only there to make the URL readable in stack traces."
-  ^URL [r root link path]
-  (let [handler (proxy [URLStreamHandler] []
-                  (openConnection [^URL u]
-                    (proxy [URLConnection] [u]
-                      (connect [])
-                      (getInputStream []
-                        (ByteArrayInputStream. (node/read-file r link))))))]
-    (URL. nil (str "firmament:" (edn/link-ref root) "!/" path) ^URLStreamHandler handler)))
+(defn- url-handler
+  "The handler for a loader's firmament: URLs, which look like
+  firmament:sha256:<manifest>!/<path>. Opening one reads the file that
+  `lookup` gives for <path> from `r`."
+  ^URLStreamHandler [r lookup]
+  (proxy [URLStreamHandler] []
+    (openConnection [^URL u]
+      (let [path (subs (.getPath u) (+ 2 (str/index-of (.getPath u) "!/")))]
+        (proxy [URLConnection] [u]
+          (connect [])
+          (getInputStream []
+            (if-let [link (lookup path)]
+              (ByteArrayInputStream. (node/read-file r link))
+              (throw (java.io.FileNotFoundException. (str u))))))))))
+
+(defn- file-url ^URL [^URLStreamHandler handler root path]
+  (URL. nil (str "firmament:" (edn/link-ref root) "!/" path) handler))
 
 ;; --------------------------------------------------------------- indexes
 
@@ -66,23 +72,23 @@
 
 ;; ------------------------------------------------------------------ jars
 
-(defn- ->path ^Path [p]
-  (if (instance? Path p) p (Paths/get (str p) (make-array String 0))))
-
 (defn- jar-file!
   "The jar at `link` as a file in `dir`, named by its hash, writing it
   first if it isn't there yet."
-  ^Path [r ^Path dir link]
-  (let [target (.resolve dir (str (subs (edn/link-ref link) (count "sha256:")) ".jar"))]
-    (when-not (Files/exists target (make-array java.nio.file.LinkOption 0))
-      (Files/createDirectories dir (make-array FileAttribute 0))
-      (let [tmp (Files/createTempFile dir "jar" ".tmp" (make-array FileAttribute 0))]
-        (try
-          (Files/write tmp ^bytes (node/read-file r link) ^"[Ljava.nio.file.OpenOption;" (make-array OpenOption 0))
-          (Files/move tmp target (into-array CopyOption [StandardCopyOption/ATOMIC_MOVE
-                                                          StandardCopyOption/REPLACE_EXISTING]))
-          (finally (Files/deleteIfExists tmp)))))
+  ^Path [r dir link]
+  (let [target (fs/path dir (str (edn/link-hex link) ".jar"))]
+    (when-not (fs/exists? target)
+      (fs/write-atomically! dir target (node/read-file r link)))
     target))
+
+(def ^:private shared-jar-dir
+  "A directory for jars when the caller gives none, shared by every loader
+  in this process (jars are named by hash, so sharing is safe) and deleted
+  when the JVM exits."
+  (delay
+    (let [dir (fs/temp-dir "firmament-jars")]
+      (.addShutdownHook (Runtime/getRuntime) (Thread. #(fs/delete-tree! dir)))
+      dir)))
 
 (defn- jar-urls ^"[Ljava.net.URL;" [r m ^Path dir]
   (into-array URL (for [[_ {:keys [link]}] (sort-by key (:entries (tree/get-tree r (:jars m))))]
@@ -97,13 +103,15 @@
   class, goes to `parent` first and then the manifest's jars, which are
   written to `jar-dir` (named by hash, so a directory can be shared)."
   ^URLClassLoader [r root & {:keys [parent jar-dir]}]
+  ;; Without a jar-dir, jars go to a temporary directory shared by the
+  ;; process and removed when it exits.
   (let [m (clj/manifest r root)
         sources (source-index r m)
-        jar-dir (->path (or jar-dir (Files/createTempDirectory "firmament-jars" (make-array FileAttribute 0))))
+        jar-dir (fs/path (or jar-dir @shared-jar-dir))
         ^ClassLoader parent (or parent (.getContextClassLoader (Thread/currentThread)))
-        own (fn [^String name]
-              (when-let [link (or (first (sources name)) (resource-link r m name))]
-                (file-url r root link name)))]
+        lookup (fn [^String name] (or (first (sources name)) (resource-link r m name)))
+        handler (url-handler r lookup)
+        own (fn [^String name] (when (lookup name) (file-url handler root name)))]
     (proxy [URLClassLoader] [(jar-urls r m jar-dir) parent]
       (getResource [name]
         (or (own name)
@@ -145,7 +153,8 @@
   requires load through the classloader as usual. Call inside `with-root`."
   [r ns]
   (when-not *ns-root* (fail "load-ns! needs a root; call it inside with-root" {:ns ns}))
-  (let [entry (get (into {} (clj/namespaces r (:namespaces (clj/manifest r *ns-root*)))) (str ns))
+  (let [m (clj/manifest r *ns-root*)
+        entry (tree/lookup r (:namespaces m) (str/split (str ns) #"\."))
         [k link] (clj/jvm-source entry)]
     (when-not link
       (fail (str "no JVM source for namespace " ns " in " (edn/link-ref *ns-root*)) {:ns ns}))

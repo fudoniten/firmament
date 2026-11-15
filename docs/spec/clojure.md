@@ -131,7 +131,8 @@ The classloader answers resource lookups like this:
 Sources and resources are served from `firmament:` URLs and read from the
 store when they're opened. Jars need to be real files for the JVM to open
 them, so each one is written once to a cache directory, named by its hash
-(`cache/jars/` in a local store).
+(`cache/jars/` in a local store; a temporary directory shared by the
+process, and removed when it exits, when no directory is given).
 
 `load-ns!` loads a namespace by name rather than by path: it takes the
 namespace's entry, reads its source and marks the namespace loaded, as
@@ -168,7 +169,16 @@ hash of its own.
 3. **Call its `-main`.** With P, the hash of a structured object (such as a
    per-machine configuration map), `-main` gets P's value as its only
    argument. Without P, it gets the ARGs as strings, as with `clojure -M -m`.
-   `firmament put --edn FILE` stores a parameters value.
+   `firmament put --edn FILE` stores a parameters value. Anyone who can
+   read the store can read P, so P is not the place for secrets on a shared
+   store ([http.md](http.md#the-server)).
+
+**The host.** Clojure and the JDK always come from the running JVM, never
+from the manifest, so there is one `clojure.lang.RT`. A Clojure jar in
+`:jars` (which `clojure -Spath` puts there) is never loaded. When its
+version isn't the running one, `run` prints a warning, since the program
+then runs on a Clojure it wasn't imported with. Recording the host a
+program needs in the manifest itself is still open.
 
 With `--from STORE`, the local store is a cache in front of STORE. Each
 object missing locally is copied in once it has been checked against its
@@ -191,11 +201,12 @@ analyses. STORE is a local directory for now; serving over HTTP is Phase 5.
 `:requires` has a sorted list for each platform the source is read for, of
 every namespace (or, in ClojureScript, npm module string) named in the `ns`
 form's `:require`, `:use`, `:require-macros` and `:use-macros` clauses,
-prefix lists expanded. The runner uses it to prefetch a program's closure
+prefix lists expanded. A libspec with only `:as-alias` is left out, since
+Clojure doesn't load it. The runner uses it to prefetch a program's closure
 without parsing source.
 
 `:analyzer` links to an object naming the code that did the analysis,
-`{:type :clj/analyzer :name "firmament.clojure" :version 1}`; its version
+`{:type :clj/analyzer :name "firmament.clojure" :version 2}`; its version
 goes up whenever the same source would be analyzed differently.
 
 **Analysis lives in its own tree**, the manifest's `:analyses`, laid out

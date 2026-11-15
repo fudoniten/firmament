@@ -53,7 +53,7 @@
 (deftest jars-are-written-by-hash
   (let [dir (temp-dir)
         jar (:link (get-in (tree/get-tree s (:jars (clj/manifest s root))) [:entries "greeting.jar"]))
-        file (.resolve dir (str (subs (edn/link-ref jar) (count "sha256:")) ".jar"))]
+        file (.resolve dir (str (edn/link-hex jar) ".jar"))]
     (loader/class-loader s root :jar-dir dir)
     (is (Files/exists file (make-array LinkOption 0)))
     (testing "and reused"

@@ -1,11 +1,11 @@
 (ns firmament.cli
   "The `firmament` command: store files, trees and projects, and load, run
   and serve them."
-  (:require [clojure.edn]
-            [clojure.main]
+  (:require [clojure.main]
             [clojure.string :as str]
             [firmament.clojure :as clj]
             [firmament.edn :as edn]
+            [firmament.fs :as fs]
             [firmament.http :as http]
             [firmament.loader :as loader]
             [firmament.node :as node]
@@ -16,8 +16,7 @@
   (:import (clojure.lang LineNumberingPushbackReader)
            (java.io InputStream InputStreamReader OutputStream OutputStreamWriter PrintStream)
            (java.lang ProcessBuilder$Redirect)
-           (java.nio.charset StandardCharsets)
-           (java.nio.file Files Paths))
+           (java.nio.charset StandardCharsets))
   (:gen-class))
 
 (set! *warn-on-reflection* true)
@@ -93,11 +92,31 @@ HASH is written sha256:<hex>.")
 (defn- parse-path [path]
   (if (or (nil? path) (= "" path)) [] (str/split path #"/")))
 
-(defn- read-path ^bytes [^String f]
-  (Files/readAllBytes (Paths/get f (make-array String 0))))
-
 (defn- usage-error [msg]
   (throw (ex-info msg {::usage true})))
+
+(defn- parse-opts
+  "Split a command's `args` into {:opts :args :rest}. `spec` maps each
+  option a command takes to its key in :opts: a keyword for an option
+  that takes a value, or [keyword] for a flag that doesn't. :args are the
+  other arguments in order, and :rest whatever follows a `--`. An option
+  that isn't in `spec` is a usage error naming `command`."
+  [command spec args]
+  (loop [[a & more :as args] args, acc {:opts {} :args [] :rest []}]
+    (cond
+      (empty? args) acc
+      (= "--" a) (assoc acc :rest (vec more))
+      (contains? spec a)
+      (let [k (spec a)]
+        (if (vector? k)
+          (recur more (assoc-in acc [:opts (first k)] true))
+          (if (seq more)
+            (recur (rest more) (assoc-in acc [:opts k] (first more)))
+            (usage-error (str command ": " a " needs a value")))))
+      (str/starts-with? a "-") (usage-error (str command " doesn't take " a))
+      :else (recur more (update acc :args conj a)))))
+
+(defn- read-path ^bytes [f] (fs/read-bytes f))
 
 (defn- hash-arg
   "The single hash in `args`, as a link."
@@ -107,30 +126,25 @@ HASH is written sha256:<hex>.")
   (edn/link (first args)))
 
 ;; Each command takes the store, its arguments and the output stream. A
-;; command that returns lines has them printed; the others write to `out`
-;; themselves.
+;; command that returns lines has them printed (links as sha256:<hex>);
+;; the others write to `out` themselves.
 
 (defn- read-edn-file [f]
-  (clojure.edn/read-string {:readers edn/readers} (String. (read-path f) StandardCharsets/UTF_8)))
+  (fs/read-edn f {:readers edn/readers} nil))
 
 (defn- put-command [s args _]
-  (cond
-    (= "-r" (first args))
-    (do (when-not (= 2 (count args))
-          (usage-error "put -r takes one directory"))
-        [(edn/link-ref (tree/import-dir! s (second args)))])
-
-    (= "--edn" (first args))
-    (do (when-not (= 2 (count args))
-          (usage-error "put --edn takes one file"))
-        [(storage/put-value! s (read-edn-file (second args)))])
-
-    (empty? args) (usage-error "put needs at least one file")
-
-    :else (mapv #(edn/link-ref (storage/put-file! s (read-path %))) args)))
+  (let [{{:keys [recursive edn]} :opts files :args} (parse-opts "put" {"-r" [:recursive] "--edn" :edn} args)]
+    (cond
+      recursive (do (when-not (and (= 1 (count files)) (not edn))
+                      (usage-error "put -r takes one directory"))
+                    [(tree/import-dir! s (first files))])
+      edn (do (when (seq files) (usage-error "put --edn takes one file"))
+              [(storage/put-value! s (read-edn-file edn))])
+      (empty? files) (usage-error "put needs at least one file")
+      :else (mapv #(storage/put-file! s (read-path %)) files))))
 
 (defn- get-command [s args ^OutputStream out]
-  (.write out ^bytes (:bytes (storage/fetch! s (edn/link-ref (hash-arg "get" args)))))
+  (.write out ^bytes (:bytes (storage/fetch! s (hash-arg "get" args))))
   nil)
 
 (defn- cat-command [s args out]
@@ -141,11 +155,9 @@ HASH is written sha256:<hex>.")
   "Whether the deps.edn in `dir` has deps the Clojure CLI has to resolve:
   anything but :local/root jars."
   [dir]
-  (let [f (Paths/get (str dir) (into-array String ["deps.edn"]))]
-    (when (Files/exists f (make-array java.nio.file.LinkOption 0))
-      (->> (:deps (clojure.edn/read-string (String. (Files/readAllBytes f) StandardCharsets/UTF_8)))
-           vals
-           (some #(not (str/ends-with? (str (:local/root %)) ".jar")))))))
+  (->> (:deps (clj/read-deps dir))
+       vals
+       (some #(not (str/ends-with? (str (:local/root %)) ".jar")))))
 
 (defn- resolve-classpath
   "The project's classpath, from `clojure -Spath` run in `dir`. The command
@@ -166,28 +178,29 @@ HASH is written sha256:<hex>.")
     (str/trim out)))
 
 (defn- import-command [s args _]
-  (let [[dir & opts] args
-        {:strs [--classpath --main] :as opts} (when (even? (count opts)) (apply hash-map opts))]
-    (when (or (nil? dir) (odd? (count (rest args)))
-              (seq (remove #{"--classpath" "--main"} (keys opts))))
+  (let [{{:keys [classpath main]} :opts [dir & more] :args}
+        (parse-opts "import" {"--classpath" :classpath "--main" :main} args)]
+    (when (or (nil? dir) (seq more))
       (usage-error "import takes a directory, and optionally --classpath CP and --main NS"))
-    (let [classpath (or --classpath (when (needs-classpath? dir) (resolve-classpath dir)))]
-      [(edn/link-ref (clj/import-project! s dir :classpath classpath :main --main))])))
+    (let [classpath (or classpath (when (needs-classpath? dir) (resolve-classpath dir)))]
+      [(clj/import-project! s dir :classpath classpath :main main)])))
 
 (defn- ls-line [{:keys [name key link]}]
   (str (edn/link-ref link) "  " name
        (case key :link "" :children "/" (str "  " key))))
 
-(defn- ls-command [s [h path & more] _]
-  (when (or (nil? h) (seq more))
-    (usage-error "ls takes a hash and an optional path"))
-  (map ls-line (node/listing s (node/load s (edn/link h)) (parse-path path))))
+(defn- ls-command [s args _]
+  (let [[h path & more] (:args (parse-opts "ls" {} args))]
+    (when (or (nil? h) (seq more))
+      (usage-error "ls takes a hash and an optional path"))
+    (map ls-line (node/listing s (node/load s (edn/link h)) (parse-path path)))))
 
 (defn- export-command [s args _]
-  (when-not (= 2 (count args))
-    (usage-error "export takes a hash and a directory"))
-  (node/export! s (node/load s (edn/link (first args))) (second args))
-  nil)
+  (let [[h dir & more] (:args (parse-opts "export" {} args))]
+    (when (or (nil? dir) (seq more))
+      (usage-error "export takes a hash and a directory"))
+    (node/export! s (node/load s (edn/link h)) dir)
+    nil))
 
 (defn- repl-command [s args ^OutputStream out]
   (when (< 1 (count args))
@@ -203,11 +216,8 @@ HASH is written sha256:<hex>.")
   nil)
 
 (defn- run-program-command [s args ^OutputStream out]
-  (let [[from args] (if (= "--from" (first args))
-                      [(or (second args) (usage-error "--from needs a store directory or URL")) (drop 2 args)]
-                      [nil args])
-        [positional [_ & program-args]] (split-with #(not= "--" %) args)
-        [h p & more] positional]
+  (let [{{:keys [from]} :opts [h p & more] :args program-args :rest}
+        (parse-opts "run" {"--from" :from} args)]
     (when (or (nil? h) (seq more))
       (usage-error "run takes a hash, an optional parameters hash, and -- before program arguments"))
     (let [r (if from (storage/cache s (other-store from)) s)
@@ -221,21 +231,21 @@ HASH is written sha256:<hex>.")
   nil)
 
 (defn- serve-command [s args _]
-  (let [{:strs [--port --bind] :as opts} (when (even? (count args)) (apply hash-map args))]
-    (when (or (odd? (count args)) (seq (remove #{"--port" "--bind"} (keys opts))))
+  (let [{{:keys [port bind]} :opts more :args} (parse-opts "serve" {"--port" :port "--bind" :bind} args)]
+    (when (seq more)
       (usage-error "serve takes an optional --port N and --bind ADDR"))
-    (let [port (if --port
-                 (or (parse-long --port) (usage-error (str "not a port: " --port)))
+    (let [port (if port
+                 (or (parse-long port) (usage-error (str "not a port: " port)))
                  8080)
-          server (http/serve! s :port port :bind (or --bind "127.0.0.1")
+          server (http/serve! s :port port :bind (or bind "127.0.0.1")
                               :token (not-empty (get *env* "FIRMAMENT_TOKEN")))]
       [(http/server-url server)])))
 
 (defn- push-command [s args _]
-  (when-not (= 2 (count args))
-    (usage-error "push takes a store and a hash"))
-  (let [[spec h] args]
-    [(storage/copy! s (other-store spec) (edn/link-ref (edn/link h)))]))
+  (let [[spec h & more] (:args (parse-opts "push" {} args))]
+    (when (or (nil? h) (seq more))
+      (usage-error "push takes a store and a hash"))
+    [(storage/copy! s (other-store spec) (edn/link h))]))
 
 (def ^:private commands
   {"put" put-command
@@ -249,9 +259,12 @@ HASH is written sha256:<hex>.")
    "serve" serve-command
    "push" push-command})
 
+(defn- line-str [x]
+  (if (edn/link? x) (edn/link-ref x) (str x)))
+
 (defn- run-command [s command args ^OutputStream out]
   (doseq [line ((commands command) s args out)]
-    (.write out (.getBytes (str line "\n") StandardCharsets/UTF_8)))
+    (.write out (.getBytes (str (line-str line) "\n") StandardCharsets/UTF_8)))
   (.flush out))
 
 (defn- complain

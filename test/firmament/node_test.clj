@@ -30,8 +30,8 @@
 
 (deftest load-validates
   (let [s (storage/memory-store)
-        bad (edn/link (storage/put-value! s {:type :chunked :level 0 :size 1 :chunks []}))
-        other (edn/link (storage/put-value! s {:type :note :text "hi"}))]
+        bad (storage/put-value! s {:type :chunked :level 0 :size 1 :chunks []})
+        other (storage/put-value! s {:type :note :text "hi"})]
     (is (thrown? clojure.lang.ExceptionInfo (node/load s bad)))
     (testing "types with no methods are any EDN"
       (is (= {:type :note :text "hi"} (node/load s other))))

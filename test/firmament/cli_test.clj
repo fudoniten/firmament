@@ -55,6 +55,8 @@
     (is (= 2 (:code (run store "frobnicate"))))
     (is (= 2 (:code (run store "get"))))
     (is (= 2 (:code (run store "put"))))
+    (is (= 2 (:code (run store "import" "." "--nope" "x"))) "an unknown option")
+    (is (= 2 (:code (run store "import" "." "--main"))) "an option without its value")
     (let [{:keys [code err]} (run store "cat" (hash/blob-hash (byte-array 1)))]
       (is (= 1 code))
       (is (str/includes? err "object not found")))

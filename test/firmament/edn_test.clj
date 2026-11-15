@@ -11,7 +11,7 @@
 
 (defn- error-kind [f]
   (try (f) nil
-       (catch clojure.lang.ExceptionInfo e (::edn/error (ex-data e)))))
+       (catch clojure.lang.ExceptionInfo e (:firmament/error (ex-data e)))))
 
 ;; ---------------------------------------------------------- golden vectors
 
